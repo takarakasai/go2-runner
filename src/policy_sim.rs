@@ -23,17 +23,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use misa_plant_mujoco::{MujocoPlant, SimOptions};
-use misa_policy_runner::go2::{
-    clamp_cmd, dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC,
-};
-use misa_policy_runner::{NaturalController, ObsInput, OnnxPolicy, PolicyTick};
+use misa_policy_runner::go2::{dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC};
+use misa_policy_runner::{ObsInput, PolicyTick};
 use misa_runner::jointvec::JointVec;
 use misa_runner::misa_core::{AxisId, Command, ControlMode, Observation, Plant};
 use misa_runner::viz;
 
 use crate::estimator::LegOdometry;
 use crate::go2_plant::{go2_axes, MISA_TO_GO2};
-use crate::policy::{spawn_keyboard, Args};
+use crate::policy::{spawn_keyboard, world_to_body, Args, Ctl};
 
 const CONTROL_DT: f64 = 0.002;
 const DECIMATION: u64 = 10;
@@ -54,12 +52,16 @@ fn quat_from_rpy(rpy: [f64; 3]) -> [f64; 4] {
 }
 
 pub(crate) fn run(a: &Args) -> Result<(), String> {
-    let policy = OnnxPolicy::load(&a.model, 39)?;
-    let mut ctl = NaturalController::new(policy, a.cfg)?;
-    let body_height = a.cfg.body_height.unwrap_or(0.40);
+    let mut ctl = Ctl::load(a)?;
+    // Pure 契約は 0.30 m のしゃがみ姿勢で学習されている（doc/mit_pure.md）。
+    let body_height = a
+        .cfg
+        .body_height
+        .unwrap_or(if matches!(ctl, Ctl::Pure(_)) { 0.30 } else { 0.40 });
     eprintln!(
-        "policy-sim: {}（stride {:.2}/{:.2}, height {:.2} m）を {} で回します",
+        "policy-sim: {}（契約: {}、stride {:.2}/{:.2}, height {:.2} m）を {} で回します",
         a.model,
+        ctl.name(),
         a.cfg.stride_gain,
         a.cfg.yaw_stride_gain.unwrap_or(a.cfg.stride_gain),
         body_height,
@@ -126,16 +128,21 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 最初の 1 tick は指令 Idle（その場保持）で回して観測を得る。
     plant.exchange(&cmd_out, &mut obs)?;
 
-    let cmd = Arc::new(Mutex::new(clamp_cmd(a.cmd0)));
+    let clamp = ctl.clamp_fn();
+    let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone())?)
+        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp)?)
     } else {
         None
     };
 
     ctl.reset();
     let mut odom = LegOdometry::new();
+    let truth_vel = std::env::var("GO2_SIM_TRUTH_VEL").ok().as_deref() == Some("1");
+    if truth_vel {
+        eprintln!("policy-sim: GO2_SIM_TRUTH_VEL=1 — 体速度入力に MuJoCo の真値を使います（診断用）");
+    }
     let mut held: PolicyTick = ctl.hold();
     let mut faults: u32 = 0;
     let mut fell: Option<String> = None;
@@ -145,6 +152,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut track_err_max = 0.0f64;
     let mut vx_sum = 0.0f64;
     let mut vx_n = 0u64;
+    let mut vx_truth_sum = 0.0f64;
 
     let mut k: u64 = 0;
     while !quit.load(Ordering::Relaxed) {
@@ -189,9 +197,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         }
 
         // 脚オドメトリ（実機と同じ経路）。
-        let stance = {
-            let sw = ctl.swing();
-            [!sw[0], !sw[1], !sw[2], !sw[3]]
+        // Natural は計画 swing、Pure は計画が無いので接地センサを使う。
+        let stance = match ctl.swing() {
+            Some(sw) => [!sw[0], !sw[1], !sw[2], !sw[3]],
+            None => core::array::from_fn(|l| {
+                obs.contacts.get(l).copied().flatten().unwrap_or(true)
+            }),
         };
         odom.update(
             &inp.quat_wxyz,
@@ -204,7 +215,20 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
 
         // ── 50 Hz: 推論 ──
         if k % DECIMATION == 0 {
-            match ctl.tick(&inp, cmd_now) {
+            // Pure76 は体速度推定を**入力**に使う。実機は脚オドメトリしか
+            // 無いが、学習時の入力は真値（Isaac の base_lin_vel）だった。
+            // GO2_SIM_TRUTH_VEL=1 で MuJoCo の真値に差し替えて、推定誤差が
+            // 効いているのかを切り分けられるようにしておく。
+            let vel_world = if truth_vel {
+                plant
+                    .sim()
+                    .body_world_linear_velocity("base")
+                    .unwrap_or(odom.vel_world())
+            } else {
+                odom.vel_world()
+            };
+            let vel_body = world_to_body(&inp.quat_wxyz, vel_world);
+            match ctl.tick(&inp, cmd_now, vel_body) {
                 Ok(tk) => {
                     if !tk.anomalies.is_empty() {
                         faults += 1;
@@ -257,6 +281,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 track_err_max = track_err_max.max(e);
             }
             vx_sum += odom.vel_world()[0];
+            vx_truth_sum += plant
+                .sim()
+                .body_world_linear_velocity("base")
+                .map(|v| v[0])
+                .unwrap_or(0.0);
             vx_n += 1;
         }
 
@@ -326,12 +355,13 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let base = plant.base_position().unwrap_or([0.0; 3]);
     eprintln!(
         "\npolicy-sim: {:.1} s / 変位 ({:+.2}, {:+.2}) m / 最終高さ {:.3} m / \
-         追従誤差 max {:.3} rad / v̄x(オドメトリ, t≥2s) {:+.3} m/s",
+         追従誤差 max {:.3} rad / v̄x(t≥2s) 真値 {:+.3} / オドメトリ {:+.3} m/s",
         k as f64 * CONTROL_DT,
         base[0],
         base[1],
         base[2],
         track_err_max,
+        if vx_n > 0 { vx_truth_sum / vx_n as f64 } else { 0.0 },
         if vx_n > 0 { vx_sum / vx_n as f64 } else { 0.0 },
     );
     match fell {

@@ -29,12 +29,13 @@ use misa_policy_runner::go2::{
     clamp_cmd, dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC, ISAAC_TO_GO2,
 };
 use misa_policy_runner::{
-    BaseState, NaturalController, ObsInput, OnnxPolicy, PolicyTick, TrajectoryCfg,
+    clamp_pure_cmd, BaseState, NaturalController, ObsInput, OnnxPolicy, PolicyTick,
+    PureController, TrajectoryCfg,
 };
 
 use crate::backend::{iface_from_env, release_sport_mode};
 use crate::estimator::LegOdometry;
-use crate::go2_plant::Go2Plant;
+use crate::go2_plant::{Go2Plant, CONTACT_THRESHOLD, MISA_LEG_TO_GO2_FOOT};
 
 /// 500 Hz の低レベル周期。
 const CONTROL_DT: f64 = 0.002;
@@ -127,15 +128,149 @@ fn parse(args: &[String]) -> Result<Args, String> {
         }
     }
     if out.model.is_empty() {
-        return Err("--model PATH は必須です（exported/policy.onnx、39 入力）".into());
+        return Err(
+            "--model PATH は必須です（exported/policy.onnx。39 入力 = Natural 契約、\
+             73/76 入力 = Pure 契約。幅から自動判別します）"
+                .into(),
+        );
     }
     Ok(out)
+}
+
+/// 契約ディスパッチ — グラフの入力幅で自動判別する。
+/// 39 = Natural（リファレンス + 残差 + τ_ff）、73/76 = Pure（ネットワークのみ、
+/// 76 は体速度推定を追加入力）。
+pub(crate) enum Ctl {
+    Natural(NaturalController),
+    Pure(PureController),
+}
+
+impl Ctl {
+    pub(crate) fn load(a: &Args) -> Result<Self, String> {
+        let mut errs = Vec::new();
+        for n in [39usize, 73, 76] {
+            match OnnxPolicy::load(&a.model, n) {
+                Ok(p) => {
+                    return if n == 39 {
+                        NaturalController::new(p, a.cfg).map(Ctl::Natural)
+                    } else {
+                        PureController::new(p).map(Ctl::Pure)
+                    };
+                }
+                Err(e) => errs.push(format!("{n}: {e}")),
+            }
+        }
+        Err(format!(
+            "--model は 39/73/76 入力のいずれとしても読めません — {}",
+            errs.join(" / ")
+        ))
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Ctl::Natural(_) => "Natural (39 入力)",
+            Ctl::Pure(c) if c.wants_velocity() => "Pure (76 入力, 体速度推定つき)",
+            Ctl::Pure(_) => "Pure (73 入力)",
+        }
+    }
+
+    /// 契約ごとの学習指令域クランプ（キーボードと初期指令の両方に使う）。
+    pub(crate) fn clamp_fn(&self) -> fn([f64; 3]) -> [f64; 3] {
+        match self {
+            Ctl::Natural(_) => clamp_cmd,
+            Ctl::Pure(_) => clamp_pure_cmd,
+        }
+    }
+
+    pub(crate) fn default_pose_isaac(&self) -> [f64; 12] {
+        match self {
+            Ctl::Natural(c) => c.default_pose_isaac(),
+            Ctl::Pure(c) => c.default_pose_isaac(),
+        }
+    }
+
+    pub(crate) fn initial_gains(&self) -> (f64, f64) {
+        match self {
+            Ctl::Natural(c) => c.initial_gains(),
+            Ctl::Pure(c) => c.initial_gains(),
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        match self {
+            Ctl::Natural(c) => c.reset(),
+            Ctl::Pure(c) => c.reset(),
+        }
+    }
+
+    pub(crate) fn gait_time_s(&self) -> f64 {
+        match self {
+            Ctl::Natural(c) => c.gait_time_s(),
+            Ctl::Pure(c) => c.gait_time_s(),
+        }
+    }
+
+    pub(crate) fn hold(&self) -> PolicyTick {
+        match self {
+            Ctl::Natural(c) => c.hold(),
+            Ctl::Pure(c) => c.hold(),
+        }
+    }
+
+    /// Natural の計画 swing。Pure は計画を持たない（呼び出し側は接地センサ
+    /// なり全接地なりのフォールバックを使う）。
+    pub(crate) fn swing(&self) -> Option<[bool; 4]> {
+        match self {
+            Ctl::Natural(c) => Some(c.swing()),
+            Ctl::Pure(_) => None,
+        }
+    }
+
+    /// `vel_body` は体座標系の並進速度推定（Pure76 のみが消費する）。
+    pub(crate) fn tick(
+        &mut self,
+        inp: &ObsInput,
+        cmd: [f64; 3],
+        vel_body: [f64; 3],
+    ) -> Result<PolicyTick, String> {
+        match self {
+            Ctl::Natural(c) => c.tick(inp, cmd),
+            Ctl::Pure(c) => c.tick(inp, cmd, vel_body),
+        }
+    }
+
+    /// 支持脚レンチ τ_ff。Pure 契約はフィードフォワード無し（ゼロ）。
+    pub(crate) fn support_torque(
+        &self,
+        base: &BaseState,
+        cmd: [f64; 3],
+        q_isaac: &[f64; 12],
+    ) -> [f64; 12] {
+        match self {
+            Ctl::Natural(c) => c.support_torque(base, cmd, q_isaac),
+            Ctl::Pure(_) => [0.0; 12],
+        }
+    }
+}
+
+/// ワールド系ベクトルを体座標系へ（v_b = R(q)ᵀ v_w、q は w,x,y,z）。
+pub(crate) fn world_to_body(q: &[f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+    let qv = [x, y, z];
+    let dot = qv[0] * v[0] + qv[1] * v[1] + qv[2] * v[2];
+    let cross = [
+        qv[1] * v[2] - qv[2] * v[1],
+        qv[2] * v[0] - qv[0] * v[2],
+        qv[0] * v[1] - qv[1] * v[0],
+    ];
+    core::array::from_fn(|i| v[i] * (2.0 * w * w - 1.0) - 2.0 * w * cross[i] + 2.0 * qv[i] * dot)
 }
 
 /// WASD テレオペ。指令は共有 cmd を書き換え、q/Esc/Ctrl-C で quit。
 pub(crate) fn spawn_keyboard(
     cmd: Arc<Mutex<[f64; 3]>>,
     quit: Arc<AtomicBool>,
+    clamp: fn([f64; 3]) -> [f64; 3],
 ) -> Result<std::thread::JoinHandle<()>, String> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -168,7 +303,7 @@ pub(crate) fn spawn_keyboard(
                         }
                         _ => {}
                     }
-                    *c = clamp_cmd(*c);
+                    *c = clamp(*c);
                 }
             }
         }
@@ -213,11 +348,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .into());
     }
 
-    let policy = OnnxPolicy::load(&a.model, 39)?;
-    let mut ctl = NaturalController::new(policy, a.cfg)?;
+    let mut ctl = Ctl::load(&a)?;
     eprintln!(
-        "policy: {} を読み込みました（stride {:.2}/{:.2}, height {:.2} m）",
+        "policy: {} を読み込みました — 契約: {}（Natural 時 stride {:.2}/{:.2}, height {:.2} m）",
         a.model,
+        ctl.name(),
         a.cfg.stride_gain,
         a.cfg.yaw_stride_gain.unwrap_or(a.cfg.stride_gain),
         a.cfg.body_height.unwrap_or(f64::NAN),
@@ -276,10 +411,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // ── B: 方策ループ ──
-    let cmd = Arc::new(Mutex::new(clamp_cmd(a.cmd0)));
+    let clamp = ctl.clamp_fn();
+    let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone())?)
+        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp)?)
     } else {
         eprintln!(
             "policy: キーボード無効。vx={:.2} vy={:.2} wz={:.2} を保持",
@@ -337,10 +473,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
             break 'run;
         }
 
-        // 脚オドメトリ（接地 = 方策側の計画 swing の否定）。
-        let stance = {
-            let sw = ctl.swing();
-            [!sw[0], !sw[1], !sw[2], !sw[3]]
+        // 脚オドメトリの接地マスク。Natural は計画 swing の否定でよいが、
+        // Pure 契約は歩容計画を持たないので足裏力センサで測る（脚順 FL,FR,
+        // RL,RR ← foot_force の FR,FL,RR,RL）。センサが無い個体では全接地に
+        // 落ちる（推定速度が鈍るだけで、方策は落ちない — sim で確認済み）。
+        let stance = match ctl.swing() {
+            Some(sw) => [!sw[0], !sw[1], !sw[2], !sw[3]],
+            None => {
+                let s = plant.last_state().ok_or("LowState がありません")?;
+                core::array::from_fn(|leg| {
+                    s.foot_force[MISA_LEG_TO_GO2_FOOT[leg]] as f64 > CONTACT_THRESHOLD
+                })
+            }
         };
         odom.update(
             &inp.quat_wxyz,
@@ -353,7 +497,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
         // 50 Hz: 推論。失敗は直前の指令を保持。
         if !a.hold && k % DECIMATION == 0 {
-            match ctl.tick(&inp, cmd_now) {
+            let vel_body = world_to_body(&inp.quat_wxyz, odom.vel_world());
+            match ctl.tick(&inp, cmd_now, vel_body) {
                 Ok(t) => {
                     if t.anomalies.is_empty() {
                         faults = 0;
