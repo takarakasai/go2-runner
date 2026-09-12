@@ -389,26 +389,30 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             height_m: odom.height_m(),
         };
         let tau_isaac = ctl.support_torque(&base_state, cmd_now, &q_isaac_meas);
+        // DCMotor のトルク-速度カーブは τ_ff にだけかける。学習時（Isaac）と
+        // Python 側 sim2sim は PD と τ_ff の**合計**にかけるので厳密には形が
+        // 違うが、PD を自分で計算して合計をクリップし純トルク指令で送る版を
+        // 実装して比べたところ、軌跡が小数 3 桁まで一致した（cmd 0.6、15 s）。
+        // この速度域では合計が平坦部（±23.7 / 45.43）に収まりカーブが効かない
+        // ためで、分岐を残す価値が無かったので Impedance 一本に戻している。
         for i in 0..12 {
             let isaac = misa_to_isaac(i);
+            let st = &obs.axes()[i];
             let ax = cmd_out.get_mut(AxisId::new(i as u16)).unwrap();
             ax.mode = ControlMode::Impedance;
             ax.position_rad = held.q_des_isaac[isaac];
             ax.velocity_rad_s = 0.0;
             ax.kp_nm_per_rad = held.kp_isaac[isaac];
             ax.kd_nm_s_per_rad = held.kd_isaac[isaac];
-            ax.torque_ff_nm = dc_motor_clip(
-                tau_isaac[isaac],
-                obs.axes()[i].velocity_rad_s,
-                effort_limit_isaac(isaac),
-            );
+            ax.torque_ff_nm =
+                dc_motor_clip(tau_isaac[isaac], st.velocity_rad_s, effort_limit_isaac(isaac));
         }
         plant.exchange(&cmd_out, &mut obs)?;
 
         // 追従誤差と速度の集計（開始 2 s 以降）。
         if t >= 2.0 {
             for i in 0..12 {
-                let e = (obs.axes()[i].position_rad - cmd_out.get(AxisId::new(i as u16)).unwrap().position_rad).abs();
+                let e = (obs.axes()[i].position_rad - held.q_des_isaac[misa_to_isaac(i)]).abs();
                 track_err_max = track_err_max.max(e);
             }
             vx_sum += odom.vel_world()[0];
@@ -426,7 +430,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             let mut measured = JointVec::zeros();
             for i in 0..12 {
                 let (leg, j) = (i / 3, i % 3);
-                planned.legs[leg][j] = cmd_out.get(AxisId::new(i as u16)).unwrap().position_rad;
+                // Torque モードでは position_rad を載せないので、方策の
+                // 目標そのものを planned として流す。
+                planned.legs[leg][j] = held.q_des_isaac[misa_to_isaac(i)];
                 measured.legs[leg][j] = obs.axes()[i].position_rad;
             }
             let stance_now: [bool; 4] =
