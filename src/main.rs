@@ -22,6 +22,8 @@ mod backend;
 mod estimator;
 mod go2_plant;
 mod policy;
+#[cfg(feature = "sim")]
+mod policy_sim;
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

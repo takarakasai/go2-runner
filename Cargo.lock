@@ -1472,6 +1472,7 @@ dependencies = [
  "crossterm",
  "env_logger",
  "log",
+ "misa-plant-mujoco",
  "misa-policy-runner",
  "misa-runner",
  "nalgebra",

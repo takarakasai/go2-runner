@@ -40,11 +40,18 @@ nalgebra = "0.34.2"
 log = "0.4"
 env_logger = "0.11"
 
+# `policy --sim` が MujocoPlant を直接組み立てるための直依存。misa-runner の
+# 同名 path 依存と同じ git ソースなので、同一インスタンスに解決される。
+[dependencies.misa-plant-mujoco]
+git = "https://github.com/takarakasai/misa-runner.git"
+package = "misa-plant-mujoco"
+optional = true
+
 [features]
 default = ["viz"]
 # misa-runner 側の feature をそのまま通す。
 viz = ["misa-runner/viz"]
-sim = ["misa-runner/sim"]
+sim = ["misa-runner/sim", "dep:misa-plant-mujoco"]
 render = ["misa-runner/render"]
 
 [workspace]

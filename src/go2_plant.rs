@@ -44,6 +44,24 @@ pub const CONTACT_THRESHOLD: f64 = 20.0;
 /// （misa-runner 側の SafetyGate は age を見て自分で判断する。）
 const STATE_WAIT: Duration = Duration::from_secs(5);
 
+/// misa の軸表（FL,FR,RL,RR × hip/thigh/calf の 12 本）。Go2Plant と
+/// MujocoPlant（policy --sim）で同じものを使う。
+pub fn go2_axes() -> Result<AxisTable, String> {
+    let mut axes = Vec::with_capacity(12);
+    for (leg, leg_name) in ["FL", "FR", "RL", "RR"].iter().enumerate() {
+        for (j, kind) in ["hip", "thigh", "calf"].iter().enumerate() {
+            axes.push(Axis {
+                name: format!("{leg_name}_{kind}_joint"),
+                role: AxisRole::Leg {
+                    leg: leg as u8,
+                    joint: j as u8,
+                },
+            });
+        }
+    }
+    AxisTable::new(axes)
+}
+
 pub struct Go2Plant {
     axes: AxisTable,
     caps: PlantCaps,
@@ -82,19 +100,7 @@ impl Go2Plant {
             .create_reader(&state_topic, ReaderQos::low_level_default())
             .map_err(|e| format!("reader: {e}"))?;
 
-        let mut axes = Vec::with_capacity(12);
-        for (leg, leg_name) in ["FL", "FR", "RL", "RR"].iter().enumerate() {
-            for (j, kind) in ["hip", "thigh", "calf"].iter().enumerate() {
-                axes.push(Axis {
-                    name: format!("{leg_name}_{kind}_joint"),
-                    role: AxisRole::Leg {
-                        leg: leg as u8,
-                        joint: j as u8,
-                    },
-                });
-            }
-        }
-        let axes = AxisTable::new(axes)?;
+        let axes = go2_axes()?;
         let caps = PlantCaps {
             modes: vec![ControlMode::Position, ControlMode::Impedance, ControlMode::Torque],
             has_imu: true,

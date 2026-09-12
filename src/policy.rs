@@ -54,15 +54,25 @@ const TILT_ABORT_RAD: f64 = 35.0 * std::f64::consts::PI / 180.0;
 /// 推論失敗・観測異常がこの回数続いたら中断。
 const MAX_CONSECUTIVE_FAULTS: u32 = 10;
 
-struct Args {
-    model: String,
-    iface: Option<String>,
-    cmd0: [f64; 3],
-    duration: Option<f64>,
-    cfg: TrajectoryCfg,
-    hold: bool,
-    keyboard: bool,
-    release: bool,
+pub(crate) struct Args {
+    pub model: String,
+    pub iface: Option<String>,
+    pub cmd0: [f64; 3],
+    pub duration: Option<f64>,
+    pub cfg: TrajectoryCfg,
+    pub hold: bool,
+    pub keyboard: bool,
+    pub release: bool,
+    /// 実機ではなく MuJoCo で回す（--features sim のビルド）。
+    pub sim: bool,
+    /// --sim: 読み込む .misa（既定 models/unitree_go2/go2.misa）。
+    pub misa: String,
+    /// --sim: articara へのライブ配信（Zenoh）。
+    pub viz: bool,
+    pub viz_endpoint: Option<String>,
+    pub viz_rate_hz: f64,
+    /// --sim: 接地摩擦の滑り成分（既定 articara の 0.7）。
+    pub friction: Option<f64>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -75,6 +85,12 @@ fn parse(args: &[String]) -> Result<Args, String> {
         hold: false,
         keyboard: true,
         release: true,
+        sim: false,
+        misa: "models/unitree_go2/go2.misa".into(),
+        viz: false,
+        viz_endpoint: None,
+        viz_rate_hz: 100.0,
+        friction: None,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -99,6 +115,14 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--hold" => out.hold = true,
             "--no-keyboard" => out.keyboard = false,
             "--no-release" => out.release = false,
+            "--sim" => out.sim = true,
+            "--misa" => out.misa = it.next().ok_or("--misa に値がありません")?.clone(),
+            "--viz" => out.viz = true,
+            "--viz-endpoint" => {
+                out.viz_endpoint = Some(it.next().ok_or("--viz-endpoint に値がありません")?.clone())
+            }
+            "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
+            "--friction" => out.friction = Some(val(&mut it, "--friction")?),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
         }
     }
@@ -109,7 +133,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
 }
 
 /// WASD テレオペ。指令は共有 cmd を書き換え、q/Esc/Ctrl-C で quit。
-fn spawn_keyboard(
+pub(crate) fn spawn_keyboard(
     cmd: Arc<Mutex<[f64; 3]>>,
     quit: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>, String> {
@@ -180,6 +204,14 @@ fn obs_input_from(s: &unitree_go2::LowState) -> ObsInput {
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = parse(args)?;
+    if a.sim {
+        #[cfg(feature = "sim")]
+        return crate::policy_sim::run(&a);
+        #[cfg(not(feature = "sim"))]
+        return Err("このビルドには sim が入っていません（--features sim で有効化。\
+                    MUJOCO_DYNAMIC_LINK_DIR も要る）"
+            .into());
+    }
 
     let policy = OnnxPolicy::load(&a.model, 39)?;
     let mut ctl = NaturalController::new(policy, a.cfg)?;

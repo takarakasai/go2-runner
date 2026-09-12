@@ -50,6 +50,31 @@ Natural 契約（go2_rl `doc/mit_natural.md`）を misa-policy-runner が実装:
 - 安全側: 観測異常・推論失敗は直前指令の保持（10 連続で中断）、
   傾き 35° で即脱力。終了は常に伏せ姿勢へのランプ経由。
 
+## RL ポリシーを MuJoCo で回す（`policy --sim` + articara 可視化）
+
+実機と**同じ** NaturalController・脚オドメトリ・デコードを MuJoCo
+（misa-plant-mujoco、物理 2 ms × 10 = 50 Hz 推論）で閉ループにする。
+articara へは planned（指令、ゴースト）と measured（MuJoCo 実測）の
+2 ストリームを Zenoh で配信する。
+
+```bash
+# 端末 1: シミュレーション + キーボード操縦 + 配信
+./scripts/policy_sim.sh            # 既定 = NaturalH30 標準チェックポイント
+
+# 端末 2: articara（viz 付きビルド）でモデルを開いて購読
+cd ../articara
+MUJOCO_DYNAMIC_LINK_DIR=$HOME/.mujoco/mujoco-3.8.0/lib \
+  cargo run --release --features viz -- --model ../go2-runner/models/unitree_go2/go2.misa
+#   GUI の「Live feed (Zenoh)」ウィンドウ:
+#   キーは既定のまま（go2/gait/planned / go2/gait/measured）、
+#   topology = Connect、endpoint = tcp/127.0.0.1:7447 で Subscribe を ON
+```
+
+キー: W/S = 前後、A/D = 旋回、R/F = 横、Space = 停止、q/Esc = 終了。
+ヘッドレス検証は `--no-keyboard --duration S --vx V`（実測 2026-09-12:
+vx 0.12 指令で 10 s に +1.10 m、高さ 0.298 m 維持、転倒なし —
+Python `sim2sim_mit_go2_mujoco.py --natural-walk` と同等の挙動）。
+
 ## ビルドの注意
 
 - `libddsc.so.0`（CycloneDDS）は cyclonedds-sys がビルドし、`cargo run` は
@@ -62,10 +87,8 @@ Natural 契約（go2_rl `doc/mit_natural.md`）を misa-policy-runner が実装:
 
 ## まだやっていないこと
 
-- 実機での歩容/WBC・policy の実走（このリポジトリはまだ机上 + `check` /
-  `dump` / 単体テストまで）。実機手順: `check` → `bridge`（受信確認）→
-  `policy --hold`（観測符号）→ 吊って `policy` → 接地。
-- policy モードの MuJoCo 閉ループ検証（Python の
-  `sim2sim_mit_go2_mujoco.py --natural-walk` と Rust 実装の突き合わせ）。
+- 実機での歩容/WBC・policy の実走（MuJoCo 閉ループまでは検証済み）。
+  実機手順: `check` → `bridge`（受信確認）→ `policy --hold`（観測符号）
+  → 吊って `policy` → 接地。
 - misa-runner にコントローラ差し込み口（seam）が入ったら、`policy` の
   自前ループを `run` 系へ統合する。
