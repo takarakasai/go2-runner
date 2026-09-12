@@ -96,14 +96,15 @@ Python `sim2sim_mit_go2_mujoco.py --natural-walk` と同等の挙動）。
 ## 別 PC での立ち上げ（依存の用意）
 
 ```bash
-# 1. misa-policy-runner を隣に置く（まだ GitHub に無く path 依存のため）
-#    ../misa-policy-runner にチェックアウト／コピーする
-ls ../misa-policy-runner/Cargo.toml   # これが無いと cargo が manifest 読めずに落ちる
-
-# 2. ビルド
+git clone git@github.com:takarakasai/go2-runner.git && cd go2-runner
 cargo build --release                 # 実機のみ（MuJoCo 不要）
 ./scripts/build_sim.sh                # MuJoCo 閉ループつき（--features sim）
 ```
+
+依存はすべて git（misa-runner / misa-policy-runner / articara /
+unitree-sdk-rs）なので、隣にチェックアウトを置く必要は無い。
+misa-policy-runner を更新したときは
+`cargo update -p misa-policy-runner` で Cargo.lock を進める。
 
 `build_sim.sh` は MuJoCo 3.8.0 を `MUJOCO_DYNAMIC_LINK_DIR` →
 `$MUJOCO_HOME/lib` → `~/.mujoco/mujoco-3.8.0/lib` の順で探し、**どこにも無ければ
