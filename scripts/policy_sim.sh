@@ -10,6 +10,13 @@
 # キー: W/S = 前後, A/D = 旋回, R/F = 横, Space = 停止, q/Esc = 終了
 set -eu
 cd "$(dirname "$0")/.."
+# libmujoco の置き場（build_sim.sh と同じ規則）。自動ダウンロードで入れた
+# 場合も ~/.mujoco/mujoco-3.8.0/lib に落ちるので、この既定で拾える。
+if [ -z "${MUJOCO_DYNAMIC_LINK_DIR:-}" ]; then
+  for d in "${MUJOCO_HOME:-}/lib" "$HOME/.mujoco/mujoco-3.8.0/lib"; do
+    if [ -e "$d/libmujoco.so.3.8.0" ]; then MUJOCO_DYNAMIC_LINK_DIR="$d"; break; fi
+  done
+fi
 export MUJOCO_DYNAMIC_LINK_DIR="${MUJOCO_DYNAMIC_LINK_DIR:-$HOME/.mujoco/mujoco-3.8.0/lib}"
 # libmujoco は cargo run でも自動では載らない（libddsc は載る）。
 export LD_LIBRARY_PATH="$MUJOCO_DYNAMIC_LINK_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

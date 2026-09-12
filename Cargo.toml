@@ -47,11 +47,24 @@ git = "https://github.com/takarakasai/misa-runner.git"
 package = "misa-plant-mujoco"
 optional = true
 
+# コードからは使わない。`sim-autodownload` feature で mujoco-rs の
+# auto-download-mujoco を有効化するためだけの直依存（cargo は feature を
+# 依存グラフ全体で統合するので、misa-plant-mujoco が引く同じ 4.0.1 に効く）。
+# version は misa-plant-mujoco の指定と一致させる。
+[dependencies.mujoco-rs]
+version = "4.0.1"
+optional = true
+
 [features]
 default = ["viz"]
 # misa-runner 側の feature をそのまま通す。
 viz = ["misa-runner/viz"]
 sim = ["misa-runner/sim", "dep:misa-plant-mujoco"]
+# MuJoCo を手で用意しない環境向け: ビルド時に mujoco-rs が公式バイナリを
+# 取ってくる（要ネットワーク、~5 MB）。MUJOCO_DYNAMIC_LINK_DIR が設定されて
+# いればそちらが優先される。実行時の LD_LIBRARY_PATH は scripts/policy_sim.sh
+# が面倒を見る（この feature で取った分もそこに入る）。
+sim-autodownload = ["sim", "dep:mujoco-rs", "mujoco-rs/auto-download-mujoco"]
 render = ["misa-runner/render"]
 
 [workspace]

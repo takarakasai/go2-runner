@@ -93,6 +93,29 @@ Python `sim2sim_mit_go2_mujoco.py --natural-walk` と同等の挙動）。
 - misa-runner にコントローラ差し込み口（seam）が入ったら、`policy` の
   自前ループを `run` 系へ統合する。
 
+## 別 PC での立ち上げ（依存の用意）
+
+```bash
+# 1. misa-policy-runner を隣に置く（まだ GitHub に無く path 依存のため）
+#    ../misa-policy-runner にチェックアウト／コピーする
+ls ../misa-policy-runner/Cargo.toml   # これが無いと cargo が manifest 読めずに落ちる
+
+# 2. ビルド
+cargo build --release                 # 実機のみ（MuJoCo 不要）
+./scripts/build_sim.sh                # MuJoCo 閉ループつき（--features sim）
+```
+
+`build_sim.sh` は MuJoCo 3.8.0 を `MUJOCO_DYNAMIC_LINK_DIR` →
+`$MUJOCO_HOME/lib` → `~/.mujoco/mujoco-3.8.0/lib` の順で探し、**どこにも無ければ
+`sim-autodownload` feature で `~/.mujoco` へ自動ダウンロードして**ビルドする
+（要ネットワーク、約 5 MB）。`cargo build --features sim` を直に叩くと
+mujoco-rs のビルドスクリプトが置き場を見つけられず
+`failed to run custom build command for mujoco-rs` で落ちるので、sim を使う
+ときはこのスクリプト経由にするか `MUJOCO_DYNAMIC_LINK_DIR` を自分で export する。
+
+学習済み ONNX はリポジトリに入っていないので別途コピーする
+（`~/work/dp/go2_rl/logs/rsl_rl/<実験名>/<run>/exported/policy.onnx`）。
+
 ## Pure 契約（ネットワークのみ）
 
 `policy` / `policy --sim` は **ONNX の入力幅で契約を自動判別**する:
