@@ -51,6 +51,46 @@ fn quat_from_rpy(rpy: [f64; 3]) -> [f64; 4] {
     [q.w, q.i, q.j, q.k]
 }
 
+/// `tcp/127.0.0.1:7447` のような zenoh エンドポイントから `host:port` を取る。
+fn socket_addr_of(endpoint: &str) -> Option<String> {
+    let rest = endpoint.split_once('/').map(|(_, r)| r).unwrap_or(endpoint);
+    let addr = rest.split(['?', '#']).next().unwrap_or(rest);
+    addr.contains(':').then(|| addr.to_string())
+}
+
+/// 待ち受けポートが空いているかを先に見る。埋まっていたら、誰が掴んで
+/// いるかの調べ方と逃げ道まで書いたエラーを返す（zenoh 由来の
+/// "Address already in use" だけだと対処が分からない）。
+fn check_viz_port(endpoint: &str) -> Result<(), String> {
+    let Some(addr) = socket_addr_of(endpoint) else {
+        return Ok(()); // tcp 以外（udp/unixsock など）は判定しない
+    };
+    match std::net::TcpListener::bind(&addr) {
+        Ok(l) => {
+            drop(l);
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
+            "viz の待ち受け {endpoint} は既に使われています（{addr}）。\n\
+             go2-run 側が listen する側なので、このポートは空いている必要があります。\n\
+             よくある原因: (1) 前回の go2-run がまだ生きている、(2) articara の Live feed を\n\
+             Connect ではなく Listen にしている、(3) zenohd が動いている。\n\
+             誰が掴んでいるか:  ss -tlnp | grep {port}    （または lsof -i :{port}）\n\
+             別ポートで逃げる:  GO2_VIZ_ENDPOINT=tcp/127.0.0.1:{next_port} ./scripts/policy_sim.sh …\n\
+             （articara 側の endpoint も同じ番号に合わせる）",
+            port = addr.rsplit(':').next().unwrap_or("7447"),
+            next_port = addr
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .map(|p| p.saturating_add(1))
+                .unwrap_or(7448),
+        )),
+        // bind できない他の理由（権限など）は zenoh 側に任せる
+        Err(_) => Ok(()),
+    }
+}
+
 pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut ctl = Ctl::load(a)?;
     // Pure 契約は 0.30 m のしゃがみ姿勢で学習されている（doc/mit_pure.md）。
@@ -105,7 +145,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut obs = Observation::empty(12, 4);
     let mut cmd_out = Command::idle(12);
 
-    // articara へのライブ配信。
+    // articara へのライブ配信。--viz-endpoint は**待ち受け**なので、ポートが
+    // 空いていることを先に確かめる（zenoh の失敗メッセージは長くて原因と
+    // 対処が読み取りにくい）。
+    if a.viz {
+        if let Some(ep) = a.viz_endpoint.as_deref() {
+            check_viz_port(ep)?;
+        }
+    }
     let mut publisher = if a.viz {
         let cfg = viz::VizConfig {
             enabled: true,

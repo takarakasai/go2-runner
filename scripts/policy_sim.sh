@@ -22,5 +22,8 @@ export MUJOCO_DYNAMIC_LINK_DIR="${MUJOCO_DYNAMIC_LINK_DIR:-$HOME/.mujoco/mujoco-
 export LD_LIBRARY_PATH="$MUJOCO_DYNAMIC_LINK_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 MODEL="${1:-$HOME/work/dp/go2_rl/logs/rsl_rl/go2_mit_natural_h30/2026-09-12_14-27-39_h30_v1/exported/policy.onnx}"
 [ $# -gt 0 ] && shift
+# 7447 が別のもの（前回の go2-run、Listen 側の articara、zenohd）に取られて
+# いるときは GO2_VIZ_ENDPOINT で番号を変えられる。articara 側も同じ番号に。
+VIZ_EP="${GO2_VIZ_ENDPOINT:-tcp/127.0.0.1:7447}"
 exec cargo run --release --features sim -- policy --sim --model "$MODEL" \
-  --viz --viz-endpoint tcp/127.0.0.1:7447 "$@"
+  --viz --viz-endpoint "$VIZ_EP" "$@"

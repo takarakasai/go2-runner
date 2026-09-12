@@ -117,6 +117,24 @@ mujoco-rs のビルドスクリプトが置き場を見つけられず
 学習済み ONNX はリポジトリに入っていないので別途コピーする
 （`~/work/dp/go2_rl/logs/rsl_rl/<実験名>/<run>/exported/policy.onnx`）。
 
+### viz のポートが埋まっているとき
+
+`--viz-endpoint` は **go2-run 側が待ち受ける**エンドポイントなので、その
+ポートが空いている必要がある（articara は Connect 側）。埋まっていると
+起動時に原因と逃げ道つきで止まる。掴んでいる相手は
+
+```bash
+ss -tlnp | grep 7447        # または lsof -i :7447
+```
+
+で判る（`ps aux | grep 7447` ではポート番号はプロセス名に出ないので見つからない）。
+よくあるのは前回の go2-run の残り、articara の Live feed を Listen 側にして
+いる、zenohd が動いている。別番号で逃げるなら:
+
+```bash
+GO2_VIZ_ENDPOINT=tcp/127.0.0.1:7448 ./scripts/policy_sim.sh   # articara 側も 7448 に
+```
+
 ## Pure 契約（ネットワークのみ）
 
 `policy` / `policy --sim` は **ONNX の入力幅で契約を自動判別**する:
