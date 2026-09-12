@@ -1,0 +1,50 @@
+# go2-runner — Unitree Go2 を misa-runner で動かす実行ファイル。
+# モデルベース（quadruped-gait の歩容 + WBC）と RL ベース
+# （misa-policy-runner の MIT モード方策）の両方を 1 本で持つ:
+#
+#   go2-run check|dump|sim ...        misa-runner のサブコマンドそのまま
+#   go2-run run --robot robots/go2.toml   歩容/WBC を実機で（Go2Backend 経由）
+#   go2-run policy --model P.onnx     RL 方策（50 Hz 推論 + 500 Hz MIT 指令）
+#
+# 機体固有のものはこのリポジトリに置く: robots/go2.toml（プロファイル）、
+# models/unitree_go2（.misa とメッシュ、go2-gait-runner から複製）、
+# Go2Plant（rt/lowcmd / rt/lowstate の DDS ブリッジ）。
+[package]
+name = "go2-runner"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Takara Kasai <takara.kasai@gmail.com>"]
+publish = false
+description = "Unitree Go2 runner on misa-runner: model-based gait/WBC via the Go2 DDS backend, and the MIT-mode RL policy via misa-policy-runner."
+
+[[bin]]
+name = "go2-run"
+path = "src/main.rs"
+
+[dependencies]
+# misa-runner は git 依存（namiashi-runner2 と同じ形）。misa_core / misa_hal は
+# misa-runner の再エクスポートを使う — 自前で引くと git の版が食い違ったとき
+# 「同じ名前の別の型」になる。
+misa-runner = { git = "https://github.com/takarakasai/misa-runner.git" }
+# RL 方策の実行系。**まだ GitHub に無いので path 依存**（隣にチェックアウトを
+# 置く前提）。公開したら namiashi-runner2 と同じく git 依存に替える。
+misa-policy-runner = { path = "../misa-policy-runner" }
+# Go2 の低レベル I/O（rt/lowcmd / rt/lowstate、sport_mode の解除）。
+# URL の綴りは go2-gait-runner と一字一句同じにする。
+unitree-go2 = { git = "https://github.com/takarakasai/unitree-sdk-rs.git", package = "unitree-go2" }
+unitree-rpc = { git = "https://github.com/takarakasai/unitree-sdk-rs.git", package = "unitree-rpc" }
+# policy モードの WASD テレオペ（go2-gait-runner と同じ）。
+crossterm = "0.27"
+nalgebra = "0.34.2"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["viz"]
+# misa-runner 側の feature をそのまま通す。
+viz = ["misa-runner/viz"]
+sim = ["misa-runner/sim"]
+render = ["misa-runner/render"]
+
+[workspace]

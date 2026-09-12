@@ -1,0 +1,4 @@
+# git 依存の取得にシステムの git を使う（~/.ssh/config のホスト別名や
+# submodule を libgit2 は読まない）。go2-gait-runner / namiashi-runner2 と同じ。
+[net]
+git-fetch-with-cli = true

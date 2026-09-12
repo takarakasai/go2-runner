@@ -1,0 +1,52 @@
+# Unitree Go2 のプロファイル。
+#
+# kind = "ros2" にしてあるのは、misa-runner が Backend（= この repo の
+# Go2Backend）を当たるのが ros2 のときだけだから。実態も CycloneDDS の
+# トピック（rt/lowcmd / rt/lowstate）なので分類として正しい。
+#
+# NIC はプロファイルには書けない（Ros2Hardware に置き場が無い）。
+# 環境変数で渡す: `GO2_IFACE=eth0 go2-run run --robot robots/go2.toml`
+name = "go2"
+
+# Go2 に補助軸は無い。**書かないと既定の arm_pitch_joint が生えて**、
+# go2.misa に無い関節を要求して起動が落ちる。
+aux = []
+
+[control]
+model = "models/unitree_go2/go2.misa"
+# rt/lowcmd の素の周期。ros2 系は上限を profile 側が決める。
+rate_hz = 500.0
+# 運動学の基準姿勢。go2.misa にあるのは bent_home（MuJoCo の home キー
+# フレーム 0.9 / -1.8 の中腰）だけで、伸ばし切りより歩容の立ち位置に近い。
+kinematics_pose = "bent_home"
+start_pose = "bent_home"
+
+[gait]
+# 歩行時の胴体高さ。RL 側の標準（NaturalH30）と揃えて 0.30 m。
+stance_height_m = 0.30
+swing_height_m = 0.06
+# プロポ/キー操縦の速度上限（歩容側。RL の policy モードは自分の包絡を持つ）
+max_vx_m_s = 0.5
+max_vy_m_s = 0.3
+max_wz_rad_s = 0.8
+
+[hardware]
+kind = "ros2"
+# Go2 の低レベルは ROS 2 ノードではなく素の DDS だが、Backend はこの
+# 2 つのトピック名をそのまま使う。
+command_topic = "rt/lowcmd"
+state_topic = "rt/lowstate"
+state_timeout_ms = 50
+# 50 Hz の方策 ZOH が 1 tick の大跳びに見えないよう、目標角の変化率上限は
+# 緩めにしておく（SafetyGate はこの値と .misa の velocity 上限の小さい方）。
+max_target_rate_rad_s = 12.0
+
+# Position 制御（歩容/WBC の位置出力）を MIT に写すときの kp/kd。
+# [hip, thigh, calf]。既定の 120/2 は LKM 向けで Go2 には硬すぎる。
+[hardware.mit_gains]
+kp = [40.0, 40.0, 40.0]
+kd = [1.5, 1.5, 2.0]
+
+[wbc]
+# 既定は無効（歩容の IK 出力を位置で流す）。--wbc / --wbc-output で有効化。
+enabled = false
