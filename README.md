@@ -128,8 +128,9 @@ ss -tlnp | grep 7447        # または lsof -i :7447
 ```
 
 で判る（`ps aux | grep 7447` ではポート番号はプロセス名に出ないので見つからない）。
-よくあるのは前回の go2-run の残り、articara の Live feed を Listen 側にして
-いる、zenohd が動いている。別番号で逃げるなら:
+よくあるのは **ROS 2 の rmw_zenoh ルータ `rmw_zenohd`**（7447 は zenoh ルータの
+既定ポート。ROS 2 を使うなら止めずに別番号へ逃がす）、前回の go2-run の残り、
+articara の Live feed を Listen 側にしている。別番号で逃げるなら:
 
 ```bash
 GO2_VIZ_ENDPOINT=tcp/127.0.0.1:7448 ./scripts/policy_sim.sh   # articara 側も 7448 に

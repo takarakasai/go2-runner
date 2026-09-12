@@ -73,8 +73,10 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
             "viz の待ち受け {endpoint} は既に使われています（{addr}）。\n\
              go2-run 側が listen する側なので、このポートは空いている必要があります。\n\
-             よくある原因: (1) 前回の go2-run がまだ生きている、(2) articara の Live feed を\n\
-             Connect ではなく Listen にしている、(3) zenohd が動いている。\n\
+             よくある原因: (1) ROS 2 の rmw_zenoh ルータ rmw_zenohd が 7447 を使っている\n\
+             （zenoh ルータの既定ポート。ROS 2 を使うなら止めずに別番号へ逃げる）、\n\
+             (2) 前回の go2-run がまだ生きている、(3) articara の Live feed を Connect では\n\
+             なく Listen にしている。\n\
              誰が掴んでいるか:  ss -tlnp | grep {port}    （または lsof -i :{port}）\n\
              別ポートで逃げる:  GO2_VIZ_ENDPOINT=tcp/127.0.0.1:{next_port} ./scripts/policy_sim.sh …\n\
              （articara 側の endpoint も同じ番号に合わせる）",
