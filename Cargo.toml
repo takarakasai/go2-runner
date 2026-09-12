@@ -29,7 +29,10 @@ path = "src/main.rs"
 misa-runner = { git = "https://github.com/takarakasai/misa-runner.git" }
 # RL 方策の実行系。**まだ GitHub に無いので path 依存**（隣にチェックアウトを
 # 置く前提）。公開したら namiashi-runner2 と同じく git 依存に替える。
-misa-policy-runner = { path = "../misa-policy-runner" }
+# version を書いておくと、隣のチェックアウトが古いときに cargo が
+# 「0.2 を満たす版が無い」と明示してくれる（版だけ古いと E0432 の
+# 「no `PureController` in the root」のような追いにくい形で出る）。
+misa-policy-runner = { path = "../misa-policy-runner", version = "0.2" }
 # Go2 の低レベル I/O（rt/lowcmd / rt/lowstate、sport_mode の解除）。
 # URL の綴りは go2-gait-runner と一字一句同じにする。
 unitree-go2 = { git = "https://github.com/takarakasai/unitree-sdk-rs.git", package = "unitree-go2" }
