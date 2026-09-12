@@ -1,0 +1,3353 @@
+schema = "misarta/1"
+
+[robot]
+name = "go2"
+root = "base"
+
+[[link]]
+name = "base"
+collision_enabled = false
+
+[link.inertial]
+mass = 6.921
+ixx = 0.107027
+iyy = 0.0980771
+izz = 0.0244531
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.021112000569701195,
+    0.0,
+    -0.005365999881178141,
+]
+rpy = [
+    -2.9649322032928467,
+    -1.5525262355804443,
+    -0.17834998667240143,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/base_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/base_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/base_2.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/base_3.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/base_4.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.box]
+size = [
+    0.37619999051094055,
+    0.09350000321865082,
+    0.11400000005960464,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.2849999964237213,
+    0.0,
+    0.009999999776482582,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.05000000074505806
+length = 0.09000000357627869
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.2930000126361847,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.04699999839067459
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/base_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/base_1.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/base_2.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/base_3.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/base_4.obj"
+
+[[link.collision]]
+
+[link.collision.geom.box]
+size = [
+    0.37619999051094055,
+    0.09350000321865082,
+    0.11400000005960464,
+]
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.2849999964237213,
+    0.0,
+    0.009999999776482582,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.05000000074505806
+length = 0.09000000357627869
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.2930000126361847,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.sphere]
+radius = 0.04699999839067459
+
+[[link]]
+name = "FL_hip"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.678
+ixx = 0.00088403
+iyy = 0.000596003
+izz = 0.000479967
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.005400000140070915,
+    0.0019399999873712659,
+    -0.0001049999991664663,
+]
+rpy = [
+    1.5802708864212036,
+    0.0049587395042181015,
+    1.5782599449157715,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link]]
+name = "FL_thigh"
+collision_enabled = false
+
+[link.inertial]
+mass = 1.152
+ixx = 0.00594973
+iyy = 0.00584149
+izz = 0.000878787
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.0037400000728666782,
+    -0.022299999371170998,
+    -0.03269999846816063,
+]
+rpy = [
+    0.11974376440048218,
+    -0.12714341282844543,
+    1.166036605834961,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.visual.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.collision.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link]]
+name = "FL_calf"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.241352
+ixx = 0.0014901
+iyy = 0.00146356
+izz = 0.0000531397
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.006295950151979923,
+    -0.0006221209769137204,
+    -0.141416996717453,
+]
+rpy = [
+    -0.004142679274082184,
+    -0.008565578609704971,
+    1.5606824159622192,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.00800000037997961,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20999960601329803,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.012000000104308128
+length = 0.11999999731779099
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/foot.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.00800000037997961,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20999960601329803,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.012000000104308128
+length = 0.11999999731779099
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link]]
+name = "FR_hip"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.678
+ixx = 0.00088403
+iyy = 0.000596003
+izz = 0.000479967
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.005400000140070915,
+    -0.0019399999873712659,
+    -0.0001049999991664663,
+]
+rpy = [
+    1.5802708864212036,
+    -0.0049587395042181015,
+    1.5633326768875122,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    3.1414999961853027,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    3.1414999961853027,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    -0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    3.1414999961853027,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    3.1414999961853027,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    -0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link]]
+name = "FR_thigh"
+collision_enabled = false
+
+[link.inertial]
+mass = 1.152
+ixx = 0.00594973
+iyy = 0.00584149
+izz = 0.000878787
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.0037400000728666782,
+    0.022299999371170998,
+    -0.03269999846816063,
+]
+rpy = [
+    0.11974377930164337,
+    0.12714342772960663,
+    1.9755560159683228,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_mirror_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_mirror_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.visual.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_mirror_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_mirror_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.collision.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link]]
+name = "FR_calf"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.241352
+ixx = 0.0014901
+iyy = 0.00146356
+izz = 0.0000531397
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.006295950151979923,
+    0.0006221209769137204,
+    -0.141416996717453,
+]
+rpy = [
+    -0.004142679274082184,
+    0.008565578609704971,
+    1.5809102058410645,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_mirror_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_mirror_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/foot.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link]]
+name = "RL_hip"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.678
+ixx = 0.00088403
+iyy = 0.000596003
+izz = 0.000479967
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.005400000140070915,
+    0.0019399999873712659,
+    -0.0001049999991664663,
+]
+rpy = [
+    1.5613216161727905,
+    0.004958709701895714,
+    1.5633326768875122,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    -3.141592502593994,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    -3.141592502593994,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    -3.141592502593994,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    -3.141592502593994,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link]]
+name = "RL_thigh"
+collision_enabled = false
+
+[link.inertial]
+mass = 1.152
+ixx = 0.00594973
+iyy = 0.00584149
+izz = 0.000878787
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.0037400000728666782,
+    -0.022299999371170998,
+    -0.03269999846816063,
+]
+rpy = [
+    0.11974376440048218,
+    -0.12714341282844543,
+    1.166036605834961,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.visual.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.collision.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link]]
+name = "RL_calf"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.241352
+ixx = 0.0014901
+iyy = 0.00146356
+izz = 0.0000531397
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.006295950151979923,
+    -0.0006221209769137204,
+    -0.141416996717453,
+]
+rpy = [
+    -0.004142679274082184,
+    -0.008565578609704971,
+    1.5606824159622192,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/foot.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link]]
+name = "RR_hip"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.678
+ixx = 0.00088403
+iyy = 0.000596003
+izz = 0.000479967
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.005400000140070915,
+    -0.0019399999873712659,
+    -0.0001049999991664663,
+]
+rpy = [
+    1.5613216161727905,
+    -0.004958709701895714,
+    1.5782599449157715,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    -0.00009265360131394118,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+rpy = [
+    -0.00009265360131394118,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.visual.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    -0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    -0.00009265360131394118,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_0.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+rpy = [
+    -0.00009265360131394118,
+    0.00009265360131394118,
+    -3.141592502593994,
+]
+
+[link.collision.geom.mesh]
+file = "assets/hip_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    -0.07999999821186066,
+    0.0,
+]
+rpy = [
+    1.5707963705062866,
+    -0.0,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.04600000008940697
+length = 0.03999999910593033
+
+[[link]]
+name = "RR_thigh"
+collision_enabled = false
+
+[link.inertial]
+mass = 1.152
+ixx = 0.00594973
+iyy = 0.00584149
+izz = 0.000878787
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    -0.0037400000728666782,
+    0.022299999371170998,
+    -0.03269999846816063,
+]
+rpy = [
+    0.11974377930164337,
+    0.12714342772960663,
+    1.9755560159683228,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_mirror_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/thigh_mirror_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.visual.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_mirror_0.obj"
+
+[[link.collision]]
+
+[link.collision.geom.mesh]
+file = "assets/thigh_mirror_1.obj"
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.10649999976158142,
+]
+rpy = [
+    0.0,
+    1.570451021194458,
+    0.0,
+]
+
+[link.collision.geom.box]
+size = [
+    0.21299999952316284,
+    0.02449999935925007,
+    0.03400000184774399,
+]
+
+[[link]]
+name = "RR_calf"
+collision_enabled = false
+
+[link.inertial]
+mass = 0.241352
+ixx = 0.0014901
+iyy = 0.00146356
+izz = 0.0000531397
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[link.inertial.origin]
+xyz = [
+    0.006295950151979923,
+    0.0006221209769137204,
+    -0.141416996717453,
+]
+rpy = [
+    -0.004142679274082184,
+    0.008565578609704971,
+    1.5809102058410645,
+]
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_mirror_0.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/calf_mirror_1.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.visual.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[link.visual.geom.mesh]
+file = "assets/foot.obj"
+
+[[link.visual]]
+color = [
+    0.800000011920929,
+    0.800000011920929,
+    0.800000011920929,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.009999999776482582,
+    0.0,
+    -0.05999999865889549,
+]
+rpy = [
+    0.0,
+    -0.20000001788139343,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.013000000268220901
+length = 0.11999999731779099
+
+[[link.collision]]
+
+[link.collision.origin]
+xyz = [
+    0.019999999552965164,
+    0.0,
+    -0.14800000190734863,
+]
+rpy = [
+    0.0,
+    0.049999989569187164,
+    0.0,
+]
+
+[link.collision.geom.cylinder]
+radius = 0.010999999940395355
+length = 0.06499999761581421
+
+[[link]]
+name = "FL_foot"
+
+[link.inertial]
+mass = 0.1
+ixx = 0.0001
+iyy = 0.0001
+izz = 0.0001
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[[link.visual]]
+color = [
+    0.5,
+    0.5,
+    0.5,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.geom.sphere]
+radius = 0.02199999988079071
+
+[link.collision.physics]
+friction = [
+    0.8,
+    0.02,
+    0.01,
+]
+condim = 6
+priority = 1
+solimp = [
+    0.015,
+    1.0,
+    0.022,
+]
+
+[[link]]
+name = "FR_foot"
+
+[link.inertial]
+mass = 0.1
+ixx = 0.0001
+iyy = 0.0001
+izz = 0.0001
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[[link.visual]]
+color = [
+    0.5,
+    0.5,
+    0.5,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.geom.sphere]
+radius = 0.02199999988079071
+
+[link.collision.physics]
+friction = [
+    0.8,
+    0.02,
+    0.01,
+]
+condim = 6
+priority = 1
+solimp = [
+    0.015,
+    1.0,
+    0.022,
+]
+
+[[link]]
+name = "RL_foot"
+
+[link.inertial]
+mass = 0.1
+ixx = 0.0001
+iyy = 0.0001
+izz = 0.0001
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[[link.visual]]
+color = [
+    0.5,
+    0.5,
+    0.5,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.geom.sphere]
+radius = 0.02199999988079071
+
+[link.collision.physics]
+friction = [
+    0.8,
+    0.02,
+    0.01,
+]
+condim = 6
+priority = 1
+solimp = [
+    0.015,
+    1.0,
+    0.022,
+]
+
+[[link]]
+name = "RR_foot"
+
+[link.inertial]
+mass = 0.1
+ixx = 0.0001
+iyy = 0.0001
+izz = 0.0001
+ixy = 0.0
+ixz = 0.0
+iyz = 0.0
+
+[[link.visual]]
+color = [
+    0.5,
+    0.5,
+    0.5,
+    1.0,
+]
+
+[link.visual.geom.sphere]
+radius = 0.02199999988079071
+
+[[link.collision]]
+
+[link.collision.geom.sphere]
+radius = 0.02199999988079071
+
+[link.collision.physics]
+friction = [
+    0.8,
+    0.02,
+    0.01,
+]
+condim = 6
+priority = 1
+solimp = [
+    0.015,
+    1.0,
+    0.022,
+]
+
+[[joint]]
+name = "FL_hip_joint"
+type = "revolute"
+parent = "base"
+child = "FL_hip"
+axis = [
+    1.0,
+    0.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.19339999556541443,
+    0.04650000110268593,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.0472
+upper = 1.0472
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FL_thigh_joint"
+type = "revolute"
+parent = "FL_hip"
+child = "FL_thigh"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.09549999982118607,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.5708
+upper = 3.4907
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FL_calf_joint"
+type = "revolute"
+parent = "FL_thigh"
+child = "FL_calf"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -2.7227
+upper = -0.83776
+effort = 45.43
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FR_hip_joint"
+type = "revolute"
+parent = "base"
+child = "FR_hip"
+axis = [
+    1.0,
+    0.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.19339999556541443,
+    -0.04650000110268593,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.0472
+upper = 1.0472
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FR_thigh_joint"
+type = "revolute"
+parent = "FR_hip"
+child = "FR_thigh"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    -0.09549999982118607,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.5708
+upper = 3.4907
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FR_calf_joint"
+type = "revolute"
+parent = "FR_thigh"
+child = "FR_calf"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -2.7227
+upper = -0.83776
+effort = 45.43
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RL_hip_joint"
+type = "revolute"
+parent = "base"
+child = "RL_hip"
+axis = [
+    1.0,
+    0.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.19339999556541443,
+    0.04650000110268593,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.0472
+upper = 1.0472
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RL_thigh_joint"
+type = "revolute"
+parent = "RL_hip"
+child = "RL_thigh"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.09549999982118607,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -0.5236
+upper = 4.5379
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RL_calf_joint"
+type = "revolute"
+parent = "RL_thigh"
+child = "RL_calf"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -2.7227
+upper = -0.83776
+effort = 45.43
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RR_hip_joint"
+type = "revolute"
+parent = "base"
+child = "RR_hip"
+axis = [
+    1.0,
+    0.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.19339999556541443,
+    -0.04650000110268593,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -1.0472
+upper = 1.0472
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RR_thigh_joint"
+type = "revolute"
+parent = "RR_hip"
+child = "RR_thigh"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    -0.09549999982118607,
+    0.0,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -0.5236
+upper = 4.5379
+effort = 23.7
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RR_calf_joint"
+type = "revolute"
+parent = "RR_thigh"
+child = "RR_calf"
+axis = [
+    0.0,
+    1.0,
+    0.0,
+]
+
+[joint.origin]
+xyz = [
+    0.0,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = -2.7227
+upper = -0.83776
+effort = 45.43
+velocity = 0.0
+
+[joint.dynamics]
+armature = 0.01
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FL_foot_fixed"
+type = "fixed"
+parent = "FL_calf"
+child = "FL_foot"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.0020000000949949026,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.0
+effort = 10.0
+velocity = 5.0
+
+[joint.dynamics]
+armature = 0.0014
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "FR_foot_fixed"
+type = "fixed"
+parent = "FR_calf"
+child = "FR_foot"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.0020000000949949026,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.0
+effort = 10.0
+velocity = 5.0
+
+[joint.dynamics]
+armature = 0.0014
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RL_foot_fixed"
+type = "fixed"
+parent = "RL_calf"
+child = "RL_foot"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.0020000000949949026,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.0
+effort = 10.0
+velocity = 5.0
+
+[joint.dynamics]
+armature = 0.0014
+damping = 2
+friction = 0.0
+
+[[joint]]
+name = "RR_foot_fixed"
+type = "fixed"
+parent = "RR_calf"
+child = "RR_foot"
+axis = [
+    0.0,
+    0.0,
+    1.0,
+]
+
+[joint.origin]
+xyz = [
+    -0.0020000000949949026,
+    0.0,
+    -0.21299999952316284,
+]
+rpy = [
+    0.0,
+    -0.0,
+    0.0,
+]
+
+[joint.limit]
+lower = 0.0
+upper = 0.0
+effort = 10.0
+velocity = 5.0
+
+[joint.dynamics]
+armature = 0.0014
+damping = 2
+friction = 0.0
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_thigh"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_hip"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_thigh"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_calf"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_foot"
+link_b = "base"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "FL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "FR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "FR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_hip"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "FR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "FR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_thigh"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "FR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_calf"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "FR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_hip"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "FR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_thigh"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "FR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_calf"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RL_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_hip"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_thigh"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_thigh"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_thigh"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RL_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_thigh"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RL_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_calf"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_hip"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_calf"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_foot"
+link_b = "RR_hip"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_calf"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_foot"
+link_b = "RR_thigh"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RR_calf"
+enabled = false
+
+[[collision_pair]]
+link_a = "RR_calf"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "FR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FL_foot"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RL_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "FR_foot"
+link_b = "RR_foot"
+enabled = false
+
+[[collision_pair]]
+link_a = "RL_foot"
+link_b = "RR_foot"
+enabled = false
+
+[[actuator]]
+name = "FL_hip_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FL_hip_joint"
+gear = 1.0
+
+[[actuator]]
+name = "FL_thigh_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FL_thigh_joint"
+gear = 1.0
+
+[[actuator]]
+name = "FL_calf_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FL_calf_joint"
+gear = 1.0
+
+[[actuator]]
+name = "FR_hip_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FR_hip_joint"
+gear = 1.0
+
+[[actuator]]
+name = "FR_thigh_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FR_thigh_joint"
+gear = 1.0
+
+[[actuator]]
+name = "FR_calf_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "FR_calf_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RL_hip_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RL_hip_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RL_thigh_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RL_thigh_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RL_calf_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RL_calf_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RR_hip_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RR_hip_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RR_thigh_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RR_thigh_joint"
+gear = 1.0
+
+[[actuator]]
+name = "RR_calf_joint_motor"
+mode = "Position"
+kp = 500.0
+kv = 5.0
+
+[[actuator.joints]]
+name = "RR_calf_joint"
+gear = 1.0
+
+[[pose]]
+name = "bent_home"
+duration = 1.5
+kind = "QuinticSmooth"
+
+[pose.angles]
+FL_calf_joint = -1.8
+FL_hip_joint = 0.0
+FL_thigh_joint = 0.9
+FR_calf_joint = -1.8
+FR_hip_joint = 0.0
+FR_thigh_joint = 0.9
+RL_calf_joint = -1.8
+RL_hip_joint = 0.0
+RL_thigh_joint = 0.9
+RR_calf_joint = -1.8
+RR_hip_joint = 0.0
+RR_thigh_joint = 0.9
+
+[[gait]]
+name = "default"
+gait_type = "Trot"
+cycle_period_s = 0.4
+duty_factor = 0.5
+swing_height_m = 0.04
+max_step_length_m = 0.1
+fl_foot = "FL_foot"
+fr_foot = "FR_foot"
+rl_foot = "RL_foot"
+rr_foot = "RR_foot"
+knee_forward = [
+    false,
+    false,
+    false,
+    false,
+]
+four_support_fraction = 0.5
+
+[home]
+base_position = [
+    0.0,
+    0.0,
+    0.0,
+]
+base_orientation = [
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+]
+
+[home.joint_positions]
+FL_calf_joint = -1.8
+FL_hip_joint = 0.0
+FL_thigh_joint = 0.9
+FR_calf_joint = -1.8
+FR_hip_joint = 0.0
+FR_thigh_joint = 0.9
+RL_calf_joint = -1.8
+RL_hip_joint = 0.0
+RL_thigh_joint = 0.9
+RR_calf_joint = -1.8
+RR_hip_joint = 0.0
+RR_thigh_joint = 0.9

@@ -9,7 +9,8 @@
 //! go2-run policy --model exported/policy.onnx [--iface eth0]
 //!                [--vx V] [--vy V] [--wz W] [--duration S]
 //!                [--stride-gain 1.55] [--yaw-stride-gain 2.0] [--body-height 0.30]
-//!                [--hold] [--no-keyboard] [--no-release]
+//!                [--vx-max 0.6] [--joint-damping 0.2] [--hold]
+//!                [--no-keyboard] [--no-release]
 //! ```
 //!
 //! 段取り（go2-gait-runner の policy モードで実証済みの形）:
@@ -74,6 +75,17 @@ pub(crate) struct Args {
     pub viz_rate_hz: f64,
     /// --sim: 接地摩擦の滑り成分（既定 articara の 0.7）。
     pub friction: Option<f64>,
+    /// |vx| の追加上限（契約のクランプの後にかける安全弁）。テレオペで
+    /// プラントが支えられない速度まで上げてしまうのを防ぐ。
+    pub vx_max: Option<f64>,
+    /// --sim: MuJoCo の `<option impratio>`（既定 100 = Python 参照プラントと同じ）。
+    pub impratio: Option<f64>,
+    /// --sim: MuJoCo の `<option cone>`（既定 elliptic、同上）。
+    pub cone: Option<String>,
+    /// --sim: 関節の受動粘性（N·m·s/rad）を .misa の値から差し替える。
+    /// go2.misa は MuJoCo Menagerie 由来の 2.0 で、数値安定性向けの
+    /// 保守的な値。実機はこれよりずっと小さい（詳細は README）。
+    pub joint_damping: Option<f64>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -92,6 +104,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
         viz_endpoint: None,
         viz_rate_hz: 100.0,
         friction: None,
+        vx_max: None,
+        impratio: None,
+        cone: None,
+        joint_damping: None,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -124,6 +140,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
+            "--vx-max" => out.vx_max = Some(val(&mut it, "--vx-max")?),
+            "--joint-damping" => out.joint_damping = Some(val(&mut it, "--joint-damping")?),
+            "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
+            "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
         }
     }
@@ -174,13 +194,39 @@ impl Ctl {
         }
     }
 
-    /// 契約ごとの学習指令域クランプ（キーボードと初期指令の両方に使う）。
+    /// 契約ごとの学習指令域クランプ。
     pub(crate) fn clamp_fn(&self) -> fn([f64; 3]) -> [f64; 3] {
         match self {
             Ctl::Natural(_) => clamp_cmd,
             Ctl::Pure(_) => clamp_pure_cmd,
         }
     }
+
+    /// 契約が学習した |vx| 上限（表示と既定の安全弁の根拠に使う）。
+    pub(crate) fn trained_vx_max(&self) -> f64 {
+        self.clamp_fn()([1e3, 0.0, 0.0])[0]
+    }
+}
+
+/// 契約クランプ + `--vx-max` の安全弁。キーボードと初期指令の両方に通す。
+pub(crate) type CmdClamp = Arc<dyn Fn([f64; 3]) -> [f64; 3] + Send + Sync>;
+
+pub(crate) fn cmd_clamp(ctl: &Ctl, vx_max: Option<f64>) -> CmdClamp {
+    let base = ctl.clamp_fn();
+    match vx_max {
+        Some(m) => {
+            let m = m.abs();
+            Arc::new(move |c| {
+                let mut c = base(c);
+                c[0] = c[0].clamp(-m, m);
+                c
+            })
+        }
+        None => Arc::new(move |c| base(c)),
+    }
+}
+
+impl Ctl {
 
     pub(crate) fn default_pose_isaac(&self) -> [f64; 12] {
         match self {
@@ -270,7 +316,7 @@ pub(crate) fn world_to_body(q: &[f64; 4], v: [f64; 3]) -> [f64; 3] {
 pub(crate) fn spawn_keyboard(
     cmd: Arc<Mutex<[f64; 3]>>,
     quit: Arc<AtomicBool>,
-    clamp: fn([f64; 3]) -> [f64; 3],
+    clamp: CmdClamp,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -411,11 +457,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // ── B: 方策ループ ──
-    let clamp = ctl.clamp_fn();
+    let clamp = cmd_clamp(&ctl, a.vx_max);
+    if let Some(m) = a.vx_max {
+        eprintln!("policy: --vx-max {m:.2} — |vx| をこの値で抑えます\r");
+    }
     let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp)?)
+        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp.clone())?)
     } else {
         eprintln!(
             "policy: キーボード無効。vx={:.2} vy={:.2} wz={:.2} を保持",

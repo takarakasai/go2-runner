@@ -136,6 +136,38 @@ articara の Live feed を Listen 側にしている。別番号で逃げるな�
 GO2_VIZ_ENDPOINT=tcp/127.0.0.1:7448 ./scripts/policy_sim.sh   # articara 側も 7448 に
 ```
 
+### テレオペで前進すると転ぶとき
+
+`policy --sim` のプラント（go2.misa）は Python 参照（go2-gait-runner の
+go2.xml）とは別の変換系で、**出せる速度が低い**。実測（Pure 契約、
+2026-09-13）:
+
+| 指令 vx | go2.misa での結果 |
+|---|---|
+| 0.3 | 真値 0.20 m/s、安定 |
+| 0.6 | 真値 0.46 m/s、安定（横流れあり） |
+| 0.7 | 歩くが横に大きく流れる |
+| 0.8 以上 | 転倒 |
+
+そのため **sim では |vx| を 0.6 に自動で抑える**（Pure 契約のように学習域が
+それより広い場合のみ。起動時にその旨を表示する）。変更・解除は `--vx-max V`。
+実機側では抑えない。Natural H30 契約は学習域自体が 0.16 なので影響しない。
+
+原因の切り分け記録:
+
+- **受動粘性は主因ではない。** `--joint-damping` で 2.0 / 0.5 / 0.2 / 0.1 と
+  下げても cmd 1.0 では 1〜3 s で転倒した（go2.misa の 2.0 は MuJoCo
+  Menagerie 由来の保守値で、実機 Go2 が 2.5 m/s 以上出る事実とは両立しない
+  が、ここでの限界を決めているのはこれではない）。
+- **接触モデルは効いた。** 既定の `pyramidal` / `impratio = 1` では接地足が
+  滑る（misa-plant-mujoco の `SimOptions::impratio` のコメントどおり）。
+  Python 参照と同じ `cone = elliptic` / `impratio = 100` / 足摩擦
+  `0.8 0.02 0.01` に合わせたところ、Natural H30 の速度追従が 112 % → 101〜
+  103 %、横流れが −0.12 m → +0.01 m（12 s）になり Python 側の数値と一致した。
+  `--impratio` / `--cone` / `--friction` で触れる。
+- 1 m/s は**実機で確認する話**。Python 参照プラント（現実的な粘性）では同じ
+  ONNX が 1.04 m/s を出している（go2_rl `doc/mit_pure.md`）。
+
 ## Pure 契約（ネットワークのみ）
 
 `policy` / `policy --sim` は **ONNX の入力幅で契約を自動判別**する:

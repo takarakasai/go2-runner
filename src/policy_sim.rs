@@ -31,12 +31,15 @@ use misa_runner::viz;
 
 use crate::estimator::LegOdometry;
 use crate::go2_plant::{go2_axes, MISA_TO_GO2};
-use crate::policy::{spawn_keyboard, world_to_body, Args, Ctl};
+use crate::policy::{cmd_clamp, spawn_keyboard, world_to_body, Args, Ctl};
 
 const CONTROL_DT: f64 = 0.002;
 const DECIMATION: u64 = 10;
 /// 転倒判定: 高さがここを割るか、roll/pitch がここを超えたら止める。
 const FALL_HEIGHT_M: f64 = 0.12;
+/// この sim（go2.misa、粘性 2.0）で安定に歩ける |vx| の実測上限より一段下。
+/// Pure 契約は 0.7 まで歩き 0.8 で転倒したので、余裕を見て 0.6。
+const SIM_SAFE_VX_MAX: f64 = 0.6;
 const FALL_TILT_RAD: f64 = 1.0;
 
 /// misa 軸 i（脚順 FL,FR,RL,RR × h/t/c）→ Isaac index（型順）。
@@ -93,6 +96,56 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
     }
 }
 
+/// `--joint-damping` 用に .misa の受動粘性を書き換えた一時コピーを作る。
+///
+/// go2.misa の `damping = 2.0` は MuJoCo Menagerie の go2.xml
+/// （`<joint damping="2" armature="0.01" frictionloss="0.2"/>`）由来で、
+/// 数値安定性を優先した保守的な値。関節速度 10 rad/s で 20 N·m を食う計算に
+/// なり、実機の Go2 が 2.5 m/s 以上出せる事実と両立しない。学習側（Isaac）は
+/// 受動粘性ゼロで、V50/V100 は U(0,2) でランダム化して両端に耐えさせている。
+/// ここを実機寄り（0.1〜0.5 程度）にすると sim でも高速側が出る。
+fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
+    let text = std::fs::read_to_string(misa_path)
+        .map_err(|e| format!("{misa_path} を読めません: {e}"))?;
+    let mut out = String::with_capacity(text.len());
+    let mut hits = 0usize;
+    for line in text.lines() {
+        if line.trim_start().starts_with("damping") && line.contains('=') {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            out.push_str(&format!("{indent}damping = {damping}\n"));
+            hits += 1;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if hits == 0 {
+        return Err(format!("{misa_path} に damping の行が見つかりません"));
+    }
+    let stem = std::path::Path::new(misa_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("model");
+    let path = std::env::temp_dir().join(format!("{stem}_damp{damping}.misa"));
+    std::fs::write(&path, out).map_err(|e| format!("一時 .misa を書けません: {e}"))?;
+    // メッシュは .misa からの相対パスで引かれるので、元と同じディレクトリに
+    // 置けない場合は解決できない。そこで元ディレクトリに置き直す。
+    let side = std::path::Path::new(misa_path)
+        .parent()
+        .map(|d| d.join(format!(".{stem}_damp{damping}.misa")));
+    if let Some(side) = side {
+        if std::fs::copy(&path, &side).is_ok() {
+            eprintln!(
+                "policy-sim: 受動粘性を {damping} N·m·s/rad に差し替えました（{hits} 関節、\
+                 {} を使用）",
+                side.display()
+            );
+            return Ok(side.to_string_lossy().into_owned());
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut ctl = Ctl::load(a)?;
     // Pure 契約は 0.30 m のしゃがみ姿勢で学習されている（doc/mit_pure.md）。
@@ -121,8 +174,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         .enumerate()
         .map(|(i, ax)| (ax.name.clone(), default_isaac[misa_to_isaac(i)]))
         .collect();
+    let misa_path = match a.joint_damping {
+        Some(d) => misa_with_damping(&a.misa, d)?,
+        None => a.misa.clone(),
+    };
     let opts = SimOptions {
-        misa_path: a.misa.clone(),
+        misa_path: misa_path.clone(),
         control_period_s: CONTROL_DT,
         timestep_s: Some(CONTROL_DT),
         // Impedance 指令が毎周期 kp/kd を運ぶので、ここの既定はランプ前の
@@ -133,9 +190,17 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         velocity_kv: 20.0,
         base_height_m: body_height,
         home,
-        friction: a.friction.map(|mu| [mu, 0.005, 0.0001]),
-        impratio: None,
-        cone: None,
+        // 接触モデルは Python の参照プラント（go2-gait-runner の go2.xml、
+        // `<option cone="elliptic" impratio="100"/>` と足 geom の
+        // friction="0.8 0.02 0.01"）に合わせる。既定の pyramidal /
+        // impratio=1 では**接地足が荷重の下で滑る**（misa-plant-mujoco 自身の
+        // SimOptions::impratio のコメントどおり）。実測では cmd 0.7 で横に
+        // 4.5 m 流れ、脚オドメトリが真値の 1/3 しか出ず（滑りの分だけ足が
+        // 空回りする）、1.0 では 1〜3 s で転倒していた。粘性を 0.1 まで
+        // 下げても直らなかったので、原因は粘性ではなく接触側。
+        friction: Some(a.friction.map_or([0.8, 0.02, 0.01], |mu| [mu, 0.02, 0.01])),
+        impratio: Some(a.impratio.unwrap_or(100.0)),
+        cone: Some(a.cone.clone().unwrap_or_else(|| "elliptic".into())),
         contact_threshold_n: 5.0,
         feet: ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
             .iter()
@@ -177,11 +242,28 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 最初の 1 tick は指令 Idle（その場保持）で回して観測を得る。
     plant.exchange(&cmd_out, &mut obs)?;
 
-    let clamp = ctl.clamp_fn();
+    // go2.misa は粘性ダンピング 2.0 の**悲観**プラント。ここで出せる速度は
+    // 実機よりかなり低く（実測: Pure 契約は vx 0.7 まで歩き、0.8 で転倒）、
+    // テレオペで W を押し続けると学習域の上限まで上がって転ぶ。--vx-max
+    // 指定が無ければ、この sim では安全側に抑える（実機側は抑えない）。
+    // 粘性を実機寄りに下げてあるなら、悲観プラント向けの上限は要らない。
+    let lowered_damping = a.joint_damping.is_some_and(|d| d < 1.0);
+    let vx_max = a.vx_max.or_else(|| {
+        let trained = ctl.trained_vx_max();
+        (!lowered_damping && trained > SIM_SAFE_VX_MAX).then(|| {
+            eprintln!(
+                "policy-sim: この sim（go2.misa、粘性 2.0 の悲観プラント）では \
+                 |vx| を {SIM_SAFE_VX_MAX:.2} に抑えます（学習域は {trained:.2}）。"
+            );
+            eprintln!("policy-sim: 解除・変更は --vx-max VALUE。実機側では抑えません。");
+            SIM_SAFE_VX_MAX
+        })
+    });
+    let clamp = cmd_clamp(&ctl, vx_max);
     let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp)?)
+        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp.clone())?)
     } else {
         None
     };
