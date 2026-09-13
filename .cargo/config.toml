@@ -1,5 +1,0 @@
-# ローカル検証用の一時パッチ。misa-policy-runner の未 push 分を隣の
-# チェックアウトから使う。push 後は消してよい（消さないと他 PC で
-# ../misa-policy-runner が無くてビルドが落ちる）。
-[patch."https://github.com/takarakasai/misa-policy-runner.git"]
-misa-policy-runner = { path = "../misa-policy-runner" }

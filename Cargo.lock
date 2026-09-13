@@ -2373,6 +2373,7 @@ dependencies = [
 [[package]]
 name = "misa-policy-runner"
 version = "0.2.0"
+source = "git+https://github.com/takarakasai/misa-policy-runner.git#2681c97ffafc48fd0906d50a6d23c5ed333290a7"
 dependencies = [
  "nalgebra",
  "tract-onnx",
