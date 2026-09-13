@@ -16,7 +16,7 @@
 //! `policy` だけはここで受ける — misa-runner の run ループには RL の二層
 //! 構造（50 Hz 方策 / 500 Hz 低レベル + 毎周期の τ_ff）の差し込み口が
 //! まだ無い。それ以外は [`misa_runner::main_with`] に Go2Backend を差して
-//! 丸投げする（namiashi-runner2 / keel-runner と同じ形）。
+//! 丸投げする（namiashi-runner2 / hayaashi-runner と同じ形）。
 
 mod backend;
 mod estimator;
