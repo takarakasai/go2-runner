@@ -2,7 +2,7 @@
 
 Unitree Go2 を **misa-runner** で動かす実行ファイル。モデルベース
 （quadruped-gait の歩容 + WBC）と RL ベース（**misa-policy-runner** の
-MIT モード方策）の両方を 1 本で持つ。namiashi-runner2 / keel-runner と
+MIT モード方策）の両方を 1 本で持つ。namiashi-runner2 / hayaashi-runner と
 同じ「薄い main + 機体固有 Backend」の形。
 
 ```
