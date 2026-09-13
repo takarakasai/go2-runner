@@ -308,8 +308,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 追従の要約（planned と measured の差の最大）
     let mut track_err_max = 0.0f64;
     let mut vx_sum = 0.0f64;
+    let mut vy_sum = 0.0f64;
     let mut vx_n = 0u64;
     let mut vx_truth_sum = 0.0f64;
+    let mut vy_truth_sum = 0.0f64;
+    let mut wz_truth_sum = 0.0f64;
     let mut candidate_sum = [[0.0f64; 3]; 4];
     let mut candidate_n = [0u64; 4];
     let mut z_min = f64::INFINITY;
@@ -454,12 +457,16 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 let e = (obs.axes()[i].position_rad - held.q_des_isaac[misa_to_isaac(i)]).abs();
                 track_err_max = track_err_max.max(e);
             }
-            vx_sum += odom.vel_world()[0];
-            vx_truth_sum += plant
+            let odom_vel = odom.vel_world();
+            vx_sum += odom_vel[0];
+            vy_sum += odom_vel[1];
+            let truth_vel = plant
                 .sim()
                 .body_world_linear_velocity("base")
-                .map(|v| v[0])
-                .unwrap_or(0.0);
+                .unwrap_or([0.0; 3]);
+            vx_truth_sum += truth_vel[0];
+            vy_truth_sum += truth_vel[1];
+            wz_truth_sum += inp.gyro_rad_s[2];
             vx_n += 1;
             for (leg, candidate) in odom.candidates_world().iter().enumerate() {
                 if let Some(v) = candidate {
@@ -552,6 +559,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         },
         if vx_n > 0 { vx_sum / vx_n as f64 } else { 0.0 },
     );
+    if vx_n > 0 {
+        eprintln!(
+            "policy-sim: v̄y(t≥2s) 真値 {:+.3} / オドメトリ {:+.3} m/s / ω̄z {:+.3} rad/s",
+            vy_truth_sum / vx_n as f64,
+            vy_sum / vx_n as f64,
+            wz_truth_sum / vx_n as f64,
+        );
+    }
     eprintln!(
         "policy-sim: 姿勢範囲 |roll|max {:.2}° / |pitch|max {:.2}° / z [{:.3}, {:.3}] m",
         roll_abs_max.to_degrees(),

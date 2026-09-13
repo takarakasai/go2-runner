@@ -319,6 +319,16 @@ pub(crate) fn world_to_body(q: &[f64; 4], v: [f64; 3]) -> [f64; 3] {
     core::array::from_fn(|i| v[i] * (2.0 * w * w - 1.0) - 2.0 * w * cross[i] + 2.0 * qv[i] * dot)
 }
 
+/// テレオペの刻み。0.02 は 1 m/s 級の方策には細かすぎる（50 回押す羽目に
+/// なる）ので、通常の刻みを上げたうえで Shift の粗刻みと数字キーの直接指定を
+/// 用意する。上限そのものは契約のクランプ（と --vx-max）が決める。
+const STEP_VX: f64 = 0.05;
+const STEP_VX_COARSE: f64 = 0.20;
+const STEP_VY: f64 = 0.05;
+const STEP_WZ: f64 = 0.10;
+/// 数字キー 1..5 に割り当てる vx。
+const VX_PRESETS: [f64; 5] = [0.2, 0.4, 0.6, 0.8, 1.0];
+
 /// WASD テレオペ。指令は共有 cmd を書き換え、q/Esc/Ctrl-C で quit。
 pub(crate) fn spawn_keyboard(
     cmd: Arc<Mutex<[f64; 3]>>,
@@ -328,9 +338,19 @@ pub(crate) fn spawn_keyboard(
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
     enable_raw_mode().map_err(|e| format!("raw mode: {e}"))?;
+    // 実効上限を出す。0.02 刻みだけだと 1.0 m/s まで 50 回押すことになり、
+    // 「0.6 までしか出せない」と誤解される（実際には上限ではなく刻みの問題）。
+    let vx_hi = clamp([100.0, 0.0, 0.0])[0];
+    let vy_hi = clamp([0.0, 100.0, 0.0])[1];
+    let wz_hi = clamp([0.0, 0.0, 100.0])[2];
     eprintln!(
-        "policy: keys — W/S = vx±0.02, A/D = wz±0.05, R/F = vy±0.02,\r\n\
-         \x20      Space = 全部 0, Esc / q = 終了（伏せて抜ける）\r"
+        "policy: keys — W/S = vx±{STEP_VX:.2}（Shift で ±{STEP_VX_COARSE:.1}）, \
+         A/D = wz±{STEP_WZ:.2}, R/F = vy±{STEP_VY:.2}\r\n\
+         \x20      1..5 = vx を {P1:.1}/{P2:.1}/{P3:.1}/{P4:.1}/{P5:.1} に即設定, \
+         0 か Space = 全部 0, Esc / q = 終了（伏せて抜ける）\r\n\
+         \x20      指令域: vx ≤ {vx_hi:.2}, |vy| ≤ {vy_hi:.2}, |wz| ≤ {wz_hi:.2}\r",
+        P1 = VX_PRESETS[0], P2 = VX_PRESETS[1], P3 = VX_PRESETS[2],
+        P4 = VX_PRESETS[3], P5 = VX_PRESETS[4],
     );
     Ok(std::thread::spawn(move || {
         loop {
@@ -341,12 +361,26 @@ pub(crate) fn spawn_keyboard(
                 if let Ok(Event::Key(k)) = event::read() {
                     let mut c = cmd.lock().unwrap();
                     match k.code {
-                        KeyCode::Char('w') | KeyCode::Up => c[0] += 0.02,
-                        KeyCode::Char('s') | KeyCode::Down => c[0] -= 0.02,
-                        KeyCode::Char('a') | KeyCode::Left => c[2] += 0.05,
-                        KeyCode::Char('d') | KeyCode::Right => c[2] -= 0.05,
-                        KeyCode::Char('r') => c[1] += 0.02,
-                        KeyCode::Char('f') => c[1] -= 0.02,
+                        // Shift 併用で粗い刻み（1.0 m/s まで 5 回で届く）
+                        KeyCode::Char('W') => c[0] += STEP_VX_COARSE,
+                        KeyCode::Char('S') => c[0] -= STEP_VX_COARSE,
+                        KeyCode::Up if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            c[0] += STEP_VX_COARSE
+                        }
+                        KeyCode::Down if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            c[0] -= STEP_VX_COARSE
+                        }
+                        // 数字キーで vx を直接指定（0 は停止）
+                        KeyCode::Char(d @ '1'..='5') => {
+                            c[0] = VX_PRESETS[(d as u8 - b'1') as usize]
+                        }
+                        KeyCode::Char('0') => *c = [0.0; 3],
+                        KeyCode::Char('w') | KeyCode::Up => c[0] += STEP_VX,
+                        KeyCode::Char('s') | KeyCode::Down => c[0] -= STEP_VX,
+                        KeyCode::Char('a') | KeyCode::Left => c[2] += STEP_WZ,
+                        KeyCode::Char('d') | KeyCode::Right => c[2] -= STEP_WZ,
+                        KeyCode::Char('r') => c[1] += STEP_VY,
+                        KeyCode::Char('f') => c[1] -= STEP_VY,
                         KeyCode::Char(' ') => *c = [0.0; 3],
                         KeyCode::Char('q') | KeyCode::Esc => quit.store(true, Ordering::Relaxed),
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
