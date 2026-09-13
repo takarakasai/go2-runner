@@ -1,1 +1,3 @@
 target/
+# --joint-damping が作るモデルの一時コピー
+models/**/.*_damp*.misa

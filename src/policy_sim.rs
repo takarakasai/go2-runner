@@ -109,8 +109,19 @@ fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
         .map_err(|e| format!("{misa_path} を読めません: {e}"))?;
     let mut out = String::with_capacity(text.len());
     let mut hits = 0usize;
+    // go2.misa には `*_foot_fixed`（type = "fixed"、damping = 0）も damping の
+    // 行を持つ。固定ジョイントに自由度は無いので書き換えても物理は変わらない
+    // が、件数の表示が誤解を招くので可動関節だけを対象にする。ブロック内の
+    // 並びは name → type → …→ damping なので、直近の type を見れば判る。
+    let mut in_fixed = false;
     for line in text.lines() {
-        if line.trim_start().starts_with("damping") && line.contains('=') {
+        let t = line.trim_start();
+        if t.starts_with("[[") {
+            in_fixed = false;
+        } else if t.starts_with("type") && t.contains('=') {
+            in_fixed = t.contains("\"fixed\"");
+        }
+        if !in_fixed && t.starts_with("damping") && line.contains('=') {
             let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
             out.push_str(&format!("{indent}damping = {damping}\n"));
             hits += 1;
