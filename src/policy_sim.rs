@@ -40,6 +40,8 @@ const FALL_HEIGHT_M: f64 = 0.12;
 /// この sim（go2.misa、粘性 2.0）で安定に歩ける |vx| の実測上限より一段下。
 /// Pure 契約は 0.7 まで歩き 0.8 で転倒したので、余裕を見て 0.6。
 const SIM_SAFE_VX_MAX: f64 = 0.6;
+/// 受動粘性の既定 [N·m·s/rad]。Unitree 公式 MuJoCo モデルの値。
+const DEFAULT_JOINT_DAMPING: f64 = 0.1;
 const FALL_TILT_RAD: f64 = 1.0;
 
 /// misa 軸 i（脚順 FL,FR,RL,RR × h/t/c）→ Isaac index（型順）。
@@ -105,8 +107,8 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
 /// 受動粘性ゼロで、V50/V100 は U(0,2) でランダム化して両端に耐えさせている。
 /// ここを実機寄り（0.1〜0.5 程度）にすると sim でも高速側が出る。
 fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
-    let text = std::fs::read_to_string(misa_path)
-        .map_err(|e| format!("{misa_path} を読めません: {e}"))?;
+    let text =
+        std::fs::read_to_string(misa_path).map_err(|e| format!("{misa_path} を読めません: {e}"))?;
     let mut out = String::with_capacity(text.len());
     let mut hits = 0usize;
     // go2.misa には `*_foot_fixed`（type = "fixed"、damping = 0）も damping の
@@ -159,11 +161,15 @@ fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
 
 pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut ctl = Ctl::load(a)?;
+    if a.odom_calibrated && !ctl.wants_velocity() {
+        return Err("--odom-calibrated は76入力Pureポリシー専用です".into());
+    }
     // Pure 契約は 0.30 m のしゃがみ姿勢で学習されている（doc/mit_pure.md）。
-    let body_height = a
-        .cfg
-        .body_height
-        .unwrap_or(if matches!(ctl, Ctl::Pure(_)) { 0.30 } else { 0.40 });
+    let body_height = a.cfg.body_height.unwrap_or(if matches!(ctl, Ctl::Pure(_)) {
+        0.30
+    } else {
+        0.40
+    });
     eprintln!(
         "policy-sim: {}（契約: {}、stride {:.2}/{:.2}, height {:.2} m）を {} で回します",
         a.model,
@@ -185,10 +191,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         .enumerate()
         .map(|(i, ax)| (ax.name.clone(), default_isaac[misa_to_isaac(i)]))
         .collect();
-    let misa_path = match a.joint_damping {
-        Some(d) => misa_with_damping(&a.misa, d)?,
-        None => a.misa.clone(),
-    };
+    // go2.misa の damping = 2.0 は MuJoCo Menagerie 由来で、**Unitree 公式の
+    // MuJoCo モデル（unitree_mujoco の unitree_robots/go2/go2.xml）は 0.1**。
+    // armature 0.01 / frictionloss 0.2 / ctrlrange 23.7・45.43 / cone elliptic /
+    // impratio 100 は両者一致で、damping だけが 20 倍違う。学習側（Isaac）も
+    // 受動粘性ゼロなので、既定はメーカー値に寄せる。Menagerie の保守値で
+    // 頑健性を見たいときは --joint-damping 2.0。
+    let damping = a.joint_damping.unwrap_or(DEFAULT_JOINT_DAMPING);
+    let misa_path = misa_with_damping(&a.misa, damping)?;
     let opts = SimOptions {
         misa_path: misa_path.clone(),
         control_period_s: CONTROL_DT,
@@ -258,7 +268,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // テレオペで W を押し続けると学習域の上限まで上がって転ぶ。--vx-max
     // 指定が無ければ、この sim では安全側に抑える（実機側は抑えない）。
     // 粘性を実機寄りに下げてあるなら、悲観プラント向けの上限は要らない。
-    let lowered_damping = a.joint_damping.is_some_and(|d| d < 1.0);
+    let lowered_damping = damping < 1.0;
     let vx_max = a.vx_max.or_else(|| {
         let trained = ctl.trained_vx_max();
         (!lowered_damping && trained > SIM_SAFE_VX_MAX).then(|| {
@@ -280,10 +290,15 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     };
 
     ctl.reset();
-    let mut odom = LegOdometry::new();
+    let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
+    if a.odom_calibrated {
+        eprintln!("policy-sim: 接地脚の速度依存滑り補正を有効化しました");
+    }
     let truth_vel = std::env::var("GO2_SIM_TRUTH_VEL").ok().as_deref() == Some("1");
     if truth_vel {
-        eprintln!("policy-sim: GO2_SIM_TRUTH_VEL=1 — 体速度入力に MuJoCo の真値を使います（診断用）");
+        eprintln!(
+            "policy-sim: GO2_SIM_TRUTH_VEL=1 — 体速度入力に MuJoCo の真値を使います（診断用）"
+        );
     }
     let mut held: PolicyTick = ctl.hold();
     let mut faults: u32 = 0;
@@ -295,6 +310,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut vx_sum = 0.0f64;
     let mut vx_n = 0u64;
     let mut vx_truth_sum = 0.0f64;
+    let mut candidate_sum = [[0.0f64; 3]; 4];
+    let mut candidate_n = [0u64; 4];
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+    let mut roll_abs_max = 0.0f64;
+    let mut pitch_abs_max = 0.0f64;
 
     let mut k: u64 = 0;
     while !quit.load(Ordering::Relaxed) {
@@ -325,6 +346,10 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
 
         // 転倒判定（シムなので即終了でよい）。
         let base = plant.base_position().unwrap_or([0.0, 0.0, body_height]);
+        z_min = z_min.min(base[2]);
+        z_max = z_max.max(base[2]);
+        roll_abs_max = roll_abs_max.max(imu.rpy_rad[0].abs());
+        pitch_abs_max = pitch_abs_max.max(imu.rpy_rad[1].abs());
         if base[2] < FALL_HEIGHT_M
             || imu.rpy_rad[0].abs() > FALL_TILT_RAD
             || imu.rpy_rad[1].abs() > FALL_TILT_RAD
@@ -342,9 +367,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // Natural は計画 swing、Pure は計画が無いので接地センサを使う。
         let stance = match ctl.swing() {
             Some(sw) => [!sw[0], !sw[1], !sw[2], !sw[3]],
-            None => core::array::from_fn(|l| {
-                obs.contacts.get(l).copied().flatten().unwrap_or(true)
-            }),
+            None => {
+                core::array::from_fn(|l| obs.contacts.get(l).copied().flatten().unwrap_or(true))
+            }
         };
         odom.update(
             &inp.quat_wxyz,
@@ -415,8 +440,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             ax.velocity_rad_s = 0.0;
             ax.kp_nm_per_rad = held.kp_isaac[isaac];
             ax.kd_nm_s_per_rad = held.kd_isaac[isaac];
-            ax.torque_ff_nm =
-                dc_motor_clip(tau_isaac[isaac], st.velocity_rad_s, effort_limit_isaac(isaac));
+            ax.torque_ff_nm = dc_motor_clip(
+                tau_isaac[isaac],
+                st.velocity_rad_s,
+                effort_limit_isaac(isaac),
+            );
         }
         plant.exchange(&cmd_out, &mut obs)?;
 
@@ -433,6 +461,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 .map(|v| v[0])
                 .unwrap_or(0.0);
             vx_n += 1;
+            for (leg, candidate) in odom.candidates_world().iter().enumerate() {
+                if let Some(v) = candidate {
+                    for axis in 0..3 {
+                        candidate_sum[leg][axis] += v[axis];
+                    }
+                    candidate_n[leg] += 1;
+                }
+            }
         }
 
         // ── viz: planned（指令）と measured（MuJoCo 実測）を対で流す ──
@@ -509,9 +545,34 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         base[1],
         base[2],
         track_err_max,
-        if vx_n > 0 { vx_truth_sum / vx_n as f64 } else { 0.0 },
+        if vx_n > 0 {
+            vx_truth_sum / vx_n as f64
+        } else {
+            0.0
+        },
         if vx_n > 0 { vx_sum / vx_n as f64 } else { 0.0 },
     );
+    eprintln!(
+        "policy-sim: 姿勢範囲 |roll|max {:.2}° / |pitch|max {:.2}° / z [{:.3}, {:.3}] m",
+        roll_abs_max.to_degrees(),
+        pitch_abs_max.to_degrees(),
+        z_min,
+        z_max,
+    );
+    if vx_n > 0 {
+        for (leg, name) in ["FL", "FR", "RL", "RR"].iter().enumerate() {
+            let n = candidate_n[leg];
+            if n > 0 {
+                eprintln!(
+                    "policy-sim: odom candidate {name}: contact {:.1}% mean=({:+.3},{:+.3},{:+.3}) m/s",
+                    100.0 * n as f64 / vx_n as f64,
+                    candidate_sum[leg][0] / n as f64,
+                    candidate_sum[leg][1] / n as f64,
+                    candidate_sum[leg][2] / n as f64,
+                );
+            }
+        }
+    }
     match fell {
         Some(reason) => Err(format!("policy-sim: {reason}")),
         None => Ok(()),

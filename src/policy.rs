@@ -30,8 +30,8 @@ use misa_policy_runner::go2::{
     clamp_cmd, dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC, ISAAC_TO_GO2,
 };
 use misa_policy_runner::{
-    clamp_pure_cmd, BaseState, NaturalController, ObsInput, OnnxPolicy, PolicyTick,
-    PureController, TrajectoryCfg,
+    clamp_pure_cmd, BaseState, NaturalController, ObsInput, OnnxPolicy, PolicyTick, PureController,
+    TrajectoryCfg,
 };
 
 use crate::backend::{iface_from_env, release_sport_mode};
@@ -86,6 +86,8 @@ pub(crate) struct Args {
     /// go2.misa は MuJoCo Menagerie 由来の 2.0 で、数値安定性向けの
     /// 保守的な値。実機はこれよりずっと小さい（詳細は README）。
     pub joint_damping: Option<f64>,
+    /// Apply the measured contact-foot slip curve to Pure76 velocity input.
+    pub odom_calibrated: bool,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -108,6 +110,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         impratio: None,
         cone: None,
         joint_damping: None,
+        odom_calibrated: false,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -142,6 +145,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
             "--vx-max" => out.vx_max = Some(val(&mut it, "--vx-max")?),
             "--joint-damping" => out.joint_damping = Some(val(&mut it, "--joint-damping")?),
+            "--odom-calibrated" => out.odom_calibrated = true,
             "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
             "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
@@ -206,6 +210,10 @@ impl Ctl {
     pub(crate) fn trained_vx_max(&self) -> f64 {
         self.clamp_fn()([1e3, 0.0, 0.0])[0]
     }
+
+    pub(crate) fn wants_velocity(&self) -> bool {
+        matches!(self, Ctl::Pure(c) if c.wants_velocity())
+    }
 }
 
 /// 契約クランプ + `--vx-max` の安全弁。キーボードと初期指令の両方に通す。
@@ -227,7 +235,6 @@ pub(crate) fn cmd_clamp(ctl: &Ctl, vx_max: Option<f64>) -> CmdClamp {
 }
 
 impl Ctl {
-
     pub(crate) fn default_pose_isaac(&self) -> [f64; 12] {
         match self {
             Ctl::Natural(c) => c.default_pose_isaac(),
@@ -341,9 +348,7 @@ pub(crate) fn spawn_keyboard(
                         KeyCode::Char('r') => c[1] += 0.02,
                         KeyCode::Char('f') => c[1] -= 0.02,
                         KeyCode::Char(' ') => *c = [0.0; 3],
-                        KeyCode::Char('q') | KeyCode::Esc => {
-                            quit.store(true, Ordering::Relaxed)
-                        }
+                        KeyCode::Char('q') | KeyCode::Esc => quit.store(true, Ordering::Relaxed),
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             quit.store(true, Ordering::Relaxed)
                         }
@@ -389,12 +394,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
         #[cfg(feature = "sim")]
         return crate::policy_sim::run(&a);
         #[cfg(not(feature = "sim"))]
-        return Err("このビルドには sim が入っていません（--features sim で有効化。\
+        return Err(
+            "このビルドには sim が入っていません（--features sim で有効化。\
                     MUJOCO_DYNAMIC_LINK_DIR も要る）"
-            .into());
+                .into(),
+        );
     }
 
     let mut ctl = Ctl::load(&a)?;
+    if a.odom_calibrated && !ctl.wants_velocity() {
+        return Err("--odom-calibrated は76入力Pureポリシー専用です".into());
+    }
     eprintln!(
         "policy: {} を読み込みました — 契約: {}（Natural 時 stride {:.2}/{:.2}, height {:.2} m）",
         a.model,
@@ -474,7 +484,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
 
     ctl.reset();
-    let mut odom = LegOdometry::new();
+    let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
     let mut held: PolicyTick = ctl.hold();
     let mut faults: u32 = 0;
     let mut status = Instant::now();

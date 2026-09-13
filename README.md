@@ -106,6 +106,25 @@ unitree-sdk-rs）なので、隣にチェックアウトを置く必要は無い
 misa-policy-runner を更新したときは
 `cargo update -p misa-policy-runner` で Cargo.lock を進める。
 
+### 受動粘性の既定は 0.1（Unitree 公式値）
+
+`policy --sim` は go2.misa を読むが、その `damping = 2.0` は MuJoCo
+Menagerie 由来の保守値で、**Unitree 公式の MuJoCo モデル**
+（[unitree_mujoco](https://github.com/unitreerobotics/unitree_mujoco) の
+`unitree_robots/go2/go2.xml`）は `damping = 0.1`。armature 0.01 /
+frictionloss 0.2 / ctrlrange 23.7・45.43 / cone elliptic / impratio 100 は
+両者一致で、この 1 点だけ 20 倍違う。学習側（Isaac）も受動粘性ゼロなので、
+**既定をメーカー値 0.1 に寄せた**（起動時に「受動粘性を 0.1 に差し替えました」
+と出る）。Menagerie の保守値で頑健性を見たいときは `--joint-damping 2.0`。
+
+これにより Pure 契約の到達速度が上がったので、`|vx|` の自動上限（0.6）は
+粘性を下げているときは掛からない。
+
+```bash
+./scripts/policy_sim.sh <policy.onnx>                    # 粘性 0.1（既定）
+./scripts/policy_sim.sh <policy.onnx> --joint-damping 2.0 # 従来の悲観プラント
+```
+
 `build_sim.sh` は MuJoCo 3.8.0 を `MUJOCO_DYNAMIC_LINK_DIR` →
 `$MUJOCO_HOME/lib` → `~/.mujoco/mujoco-3.8.0/lib` の順で探し、**どこにも無ければ
 `sim-autodownload` feature で `~/.mujoco` へ自動ダウンロードして**ビルドする
