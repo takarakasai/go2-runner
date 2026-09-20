@@ -6,7 +6,8 @@
 //! ループを回す（misa-runner にコントローラの seam が入ったら移す）。
 //!
 //! ```text
-//! go2-run policy --model exported/policy.onnx [--iface eth0]
+//! go2-run policy --model exported/policy.onnx [--estimator estimator.onnx]
+//!                [--iface eth0]
 //!                [--vx V] [--vy V] [--wz W] [--duration S]
 //!                [--stride-gain 1.55] [--yaw-stride-gain 2.0]
 //!                [--body-height 0.30 | --low-stance]
@@ -39,9 +40,10 @@ use std::time::{Duration, Instant};
 use misa_policy_runner::go2::{
     clamp_cmd, dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC, ISAAC_TO_GO2,
 };
+use misa_policy_runner::gru::{HistoryVelocityEstimator, VelocitySource};
 use misa_policy_runner::{
-    clamp_pure_cmd, BaseState, NaturalController, ObsInput, OnnxPolicy, PolicyTick, PureController,
-    TrajectoryCfg,
+    clamp_gru_cmd, clamp_pure_cmd, graph_input_arity, BaseState, NaturalController, ObsInput,
+    OnnxPolicy, PolicyTick, PureController, PureGruController, RecurrentOnnxPolicy, TrajectoryCfg,
 };
 
 use crate::backend::{iface_from_env, release_sport_mode};
@@ -98,6 +100,12 @@ pub(crate) struct Args {
     pub joint_damping: Option<f64>,
     /// Apply the measured contact-foot slip curve to Pure76 velocity input.
     pub odom_calibrated: bool,
+    /// GRU 契約の凍結速度推定器（6×73 → 3）。再帰グラフには必須で、
+    /// `--gru-host-velocity` を付けたときだけ省ける。
+    pub estimator: Option<String>,
+    /// GRU 契約の速度入力を推定器ではなく脚オドメトリにする（診断用）。
+    /// 契約から外れる — 別の入力分布になる（doc/gru_deploy.md）。
+    pub gru_host_velocity: bool,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -121,6 +129,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         cone: None,
         joint_damping: None,
         odom_calibrated: false,
+        estimator: None,
+        gru_host_velocity: false,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -175,6 +185,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--vx-max" => out.vx_max = Some(val(&mut it, "--vx-max")?),
             "--joint-damping" => out.joint_damping = Some(val(&mut it, "--joint-damping")?),
             "--odom-calibrated" => out.odom_calibrated = true,
+            "--estimator" => {
+                out.estimator = Some(it.next().ok_or("--estimator に値がありません")?.clone())
+            }
+            "--gru-host-velocity" => out.gru_host_velocity = true,
             "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
             "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
@@ -182,24 +196,53 @@ fn parse(args: &[String]) -> Result<Args, String> {
     }
     if out.model.is_empty() {
         return Err(
-            "--model PATH は必須です（exported/policy.onnx。39 入力 = Natural 契約、\
-             73/76 入力 = Pure 契約。幅から自動判別します）"
+            "--model PATH は必須です（exported/policy.onnx。入力が 1 本なら幅で \
+             39 = Natural / 73・76 = Pure、2 本なら GRU 契約（76 + 隠れ状態 128）。\
+             GRU には --estimator も要ります）"
                 .into(),
         );
     }
     Ok(out)
 }
 
-/// 契約ディスパッチ — グラフの入力幅で自動判別する。
-/// 39 = Natural（リファレンス + 残差 + τ_ff）、73/76 = Pure（ネットワークのみ、
-/// 76 は体速度推定を追加入力）。
+/// 契約ディスパッチ — まずグラフの**入力の本数**、次に幅で判別する。
+///
+/// 入力 1 本: 39 = Natural（リファレンス + 残差 + τ_ff）、73/76 = Pure
+/// （ネットワークのみ、76 は体速度推定を追加入力）。
+/// 入力 2 本: GRU（76 + 隠れ状態 128 の再帰方策）。
+///
+/// **幅だけで Pure76 と GRU を見分けてはいけない** — どちらも 76 入力で、
+/// 中身（隠れ状態・速度の出どころ・指令域）がまるごと違う
+/// （go2_rl doc/gru_runtime_contract_audit_20260920.md）。
 pub(crate) enum Ctl {
     Natural(NaturalController),
     Pure(PureController),
+    Gru(PureGruController),
 }
 
 impl Ctl {
     pub(crate) fn load(a: &Args) -> Result<Self, String> {
+        if graph_input_arity(&a.model)? == 2 {
+            let policy = RecurrentOnnxPolicy::load(&a.model, 76, 128, 36)?;
+            let velocity = if a.gru_host_velocity {
+                if a.estimator.is_some() {
+                    return Err("--gru-host-velocity と --estimator は同時に使えません".into());
+                }
+                eprintln!(
+                    "policy: --gru-host-velocity — 速度入力に脚オドメトリを使います。\
+                     GRU 契約は凍結推定器で学習しているので、これは診断用の別入力です。"
+                );
+                VelocitySource::Host
+            } else {
+                let path = a.estimator.as_deref().ok_or(
+                    "GRU 契約（2 入力グラフ）には --estimator PATH が要ります\
+                     （6×73 → 3 の凍結速度推定器。脚オドメトリで代用するなら \
+                     --gru-host-velocity を明示してください）",
+                )?;
+                VelocitySource::Estimator(HistoryVelocityEstimator::load(path)?)
+            };
+            return PureGruController::new(policy, velocity).map(Ctl::Gru);
+        }
         let mut errs = Vec::new();
         for n in [39usize, 73, 76] {
             match OnnxPolicy::load(&a.model, n) {
@@ -224,6 +267,8 @@ impl Ctl {
             Ctl::Natural(_) => "Natural (39 入力)",
             Ctl::Pure(c) if c.wants_velocity() => "Pure (76 入力, 体速度推定つき)",
             Ctl::Pure(_) => "Pure (73 入力)",
+            Ctl::Gru(c) if c.wants_host_velocity() => "GRU (76 入力 + 隠れ状態 128, 脚オドメトリ)",
+            Ctl::Gru(_) => "GRU (76 入力 + 隠れ状態 128, 凍結推定器)",
         }
     }
 
@@ -232,6 +277,7 @@ impl Ctl {
         match self {
             Ctl::Natural(_) => clamp_cmd,
             Ctl::Pure(_) => clamp_pure_cmd,
+            Ctl::Gru(_) => clamp_gru_cmd,
         }
     }
 
@@ -240,8 +286,20 @@ impl Ctl {
         self.clamp_fn()([1e3, 0.0, 0.0])[0]
     }
 
+    /// 呼び出し側が体速度推定（脚オドメトリ）を渡す必要があるか。
+    /// GRU で凍結推定器を使う構成では false — 速度は契約の内側で作られる。
     pub(crate) fn wants_velocity(&self) -> bool {
-        matches!(self, Ctl::Pure(c) if c.wants_velocity())
+        match self {
+            Ctl::Pure(c) => c.wants_velocity(),
+            Ctl::Gru(c) => c.wants_host_velocity(),
+            Ctl::Natural(_) => false,
+        }
+    }
+
+    /// ネットワーク入力ではなく「しゃがみ姿勢（0.30 m）で学習した契約か」。
+    /// sim の初期高さの既定に使う。
+    pub(crate) fn is_crouch_contract(&self) -> bool {
+        matches!(self, Ctl::Pure(_) | Ctl::Gru(_))
     }
 }
 
@@ -268,6 +326,7 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.default_pose_isaac(),
             Ctl::Pure(c) => c.default_pose_isaac(),
+            Ctl::Gru(c) => c.default_pose_isaac(),
         }
     }
 
@@ -275,6 +334,7 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.initial_gains(),
             Ctl::Pure(c) => c.initial_gains(),
+            Ctl::Gru(c) => c.initial_gains(),
         }
     }
 
@@ -282,6 +342,7 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.reset(),
             Ctl::Pure(c) => c.reset(),
+            Ctl::Gru(c) => c.reset(),
         }
     }
 
@@ -289,6 +350,7 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.gait_time_s(),
             Ctl::Pure(c) => c.gait_time_s(),
+            Ctl::Gru(c) => c.gait_time_s(),
         }
     }
 
@@ -296,19 +358,21 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.hold(),
             Ctl::Pure(c) => c.hold(),
+            Ctl::Gru(c) => c.hold(),
         }
     }
 
-    /// Natural の計画 swing。Pure は計画を持たない（呼び出し側は接地センサ
-    /// なり全接地なりのフォールバックを使う）。
+    /// Natural の計画 swing。Pure / GRU は計画を持たない（呼び出し側は接地
+    /// センサなり全接地なりのフォールバックを使う）。
     pub(crate) fn swing(&self) -> Option<[bool; 4]> {
         match self {
             Ctl::Natural(c) => Some(c.swing()),
-            Ctl::Pure(_) => None,
+            Ctl::Pure(_) | Ctl::Gru(_) => None,
         }
     }
 
-    /// `vel_body` は体座標系の並進速度推定（Pure76 のみが消費する）。
+    /// `vel_body` は体座標系の並進速度推定（Pure76 と、脚オドメトリ構成の
+    /// GRU だけが消費する）。
     pub(crate) fn tick(
         &mut self,
         inp: &ObsInput,
@@ -318,10 +382,11 @@ impl Ctl {
         match self {
             Ctl::Natural(c) => c.tick(inp, cmd),
             Ctl::Pure(c) => c.tick(inp, cmd, vel_body),
+            Ctl::Gru(c) => c.tick(inp, cmd, vel_body),
         }
     }
 
-    /// 支持脚レンチ τ_ff。Pure 契約はフィードフォワード無し（ゼロ）。
+    /// 支持脚レンチ τ_ff。Pure / GRU 契約はフィードフォワード無し（ゼロ）。
     pub(crate) fn support_torque(
         &self,
         base: &BaseState,
@@ -330,7 +395,7 @@ impl Ctl {
     ) -> [f64; 12] {
         match self {
             Ctl::Natural(c) => c.support_torque(base, cmd, q_isaac),
-            Ctl::Pure(_) => [0.0; 12],
+            Ctl::Pure(_) | Ctl::Gru(_) => [0.0; 12],
         }
     }
 }
@@ -466,7 +531,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let mut ctl = Ctl::load(&a)?;
     if a.odom_calibrated && !ctl.wants_velocity() {
-        return Err("--odom-calibrated は76入力Pureポリシー専用です".into());
+        return Err(
+            "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
+             （76 入力 Pure、または --gru-host-velocity の GRU）"
+                .into(),
+        );
+    }
+    if a.estimator.is_some() && !matches!(ctl, Ctl::Gru(_)) {
+        return Err("--estimator は GRU 契約（2 入力グラフ）専用です".into());
     }
     eprintln!(
         "policy: {} を読み込みました — 契約: {}（Natural 時 stride {:.2}/{:.2}, height {:.2} m）",

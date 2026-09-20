@@ -162,10 +162,18 @@ fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
 pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut ctl = Ctl::load(a)?;
     if a.odom_calibrated && !ctl.wants_velocity() {
-        return Err("--odom-calibrated は76入力Pureポリシー専用です".into());
+        return Err(
+            "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
+             （76 入力 Pure、または --gru-host-velocity の GRU）"
+                .into(),
+        );
     }
-    // Pure 契約は 0.30 m のしゃがみ姿勢で学習されている（doc/mit_pure.md）。
-    let body_height = a.cfg.body_height.unwrap_or(if matches!(ctl, Ctl::Pure(_)) {
+    if a.estimator.is_some() && !matches!(ctl, Ctl::Gru(_)) {
+        return Err("--estimator は GRU 契約（2 入力グラフ）専用です".into());
+    }
+    // Pure / GRU 契約は 0.30 m のしゃがみ姿勢で学習されている
+    // （doc/mit_pure.md、doc/gru_deploy.md）。
+    let body_height = a.cfg.body_height.unwrap_or(if ctl.is_crouch_contract() {
         0.30
     } else {
         0.40
