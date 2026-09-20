@@ -397,6 +397,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut vx_sum = 0.0f64;
     let mut vy_sum = 0.0f64;
     let mut vx_n = 0u64;
+    let mut vx_fed_sum = 0.0f64;
+    let mut vy_fed_sum = 0.0f64;
+    let mut fed_n = 0u64;
     let mut vx_world_sum = 0.0f64;
     let mut vy_world_sum = 0.0f64;
     let mut vx_truth_sum = 0.0f64;
@@ -565,6 +568,13 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             vx_world_sum += truth_vel[0];
             vy_world_sum += truth_vel[1];
             wz_truth_sum += inp.gyro_rad_s[2];
+            // 方策に実際に入った速度。GRU の凍結推定器は契約の内側で作るので、
+            // ここを出さないと「方策が何を信じて歩いているか」が見えない。
+            if let Some(v) = ctl.velocity_fed() {
+                vx_fed_sum += v[0];
+                vy_fed_sum += v[1];
+                fed_n += 1;
+            }
             vx_n += 1;
             for (leg, candidate) in odom.candidates_world().iter().enumerate() {
                 if let Some(v) = candidate {
@@ -671,6 +681,20 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             vx_world_sum / vx_n as f64,
             vy_world_sum / vx_n as f64,
         );
+        if fed_n > 0 {
+            // 方策の入力 vs 真値。ハードウェアには真値が無いので、ここで
+            // 系統誤差の大きさを掴んでおく（実機では推定器と脚オドメトリの
+            // 突き合わせが同じ役をする）。
+            let fed = [vx_fed_sum / fed_n as f64, vy_fed_sum / fed_n as f64];
+            eprintln!(
+                "policy-sim: 方策への速度入力(t≥2s, 体系) ({:+.3}, {:+.3}) m/s — \
+                 真値との差 ({:+.3}, {:+.3})",
+                fed[0],
+                fed[1],
+                fed[0] - vx_truth_sum / vx_n as f64,
+                fed[1] - vy_truth_sum / vx_n as f64,
+            );
+        }
     }
     eprintln!(
         "policy-sim: 姿勢範囲 |roll|max {:.2}° / |pitch|max {:.2}° / z [{:.3}, {:.3}] m",

@@ -281,6 +281,16 @@ impl Ctl {
         }
     }
 
+    /// 方策に**実際に入った**体座標系の速度（GRU の凍結推定器は契約の内側で
+    /// 速度を作るので、呼び出し側が渡した値とは限らない）。速度入力を持たない
+    /// 契約では None。
+    pub(crate) fn velocity_fed(&self) -> Option<[f64; 3]> {
+        match self {
+            Ctl::Gru(c) => Some(c.velocity_used()),
+            Ctl::Natural(_) | Ctl::Pure(_) => None,
+        }
+    }
+
     /// 契約が学習した |vx| 上限（表示と既定の安全弁の根拠に使う）。
     pub(crate) fn trained_vx_max(&self) -> f64 {
         self.clamp_fn()([1e3, 0.0, 0.0])[0]
