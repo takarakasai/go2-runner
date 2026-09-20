@@ -203,6 +203,15 @@ GO2_VIZ_ENDPOINT=tcp/127.0.0.1:7448 ./scripts/policy_sim.sh   # articara 側も 
   `0.8 0.02 0.01` に合わせたところ、Natural H30 の速度追従が 112 % → 101〜
   103 %、横流れが −0.12 m → +0.01 m（12 s）になり Python 側の数値と一致した。
   `--impratio` / `--cone` / `--friction` で触れる。
+
+  **`--friction` は 2026-09-20 まで足に届いていなかった**（μ 0.1 と 0.8 で
+  軌跡がビット単位で一致する、という形で出た）。`SimOptions::friction` は
+  MJCF の `<default><geom friction=…/>` にしか入らないのに、go2.misa の足
+  geom は `friction = [0.8, 0.02, 0.01]` を明示したうえ `priority = 1` を
+  持つため、per-geom 値が `<default>` を上書きし接触ペアの摩擦を単独で決める。
+  いまは `--friction` が一時 .misa 側の slide 成分（4 面）を書き換える。
+  **これ以前に Rust sim で取った摩擦スイープの結果は無効**（.misa の 0.8 で
+  測っていたことになる）。Python 参照プラント側の摩擦知見は影響を受けない。
 - 1 m/s は**実機で確認する話**。Python 参照プラント（現実的な粘性）では同じ
   ONNX が 1.04 m/s を出している（go2_rl `doc/mit_pure.md`）。
 

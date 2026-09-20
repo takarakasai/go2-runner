@@ -98,7 +98,86 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
     }
 }
 
-/// `--joint-damping` 用に .misa の受動粘性を書き換えた一時コピーを作る。
+/// `.misa` のテキストを書き換える純関数 — 受動粘性（全可動関節）と、
+/// 接地摩擦の **slide 成分**（接触 geom の `friction` 配列の 1 要素目）。
+/// 返すのは `(text, 書き換えた関節数, 書き換えた接触面数)`。
+///
+/// 摩擦をここで当てるのには理由がある。`SimOptions::friction` は MJCF の
+/// `<default><geom friction=…/></default>` にしか入らないのに、go2.misa の
+/// 足 geom は `friction = [0.8, 0.02, 0.01]` を**明示**したうえ
+/// `priority = 1` を持つ。MuJoCo では per-geom 値が `<default>` を上書きし、
+/// priority 付きの geom が接触ペアの摩擦を単独で決めるので、`<default>` 経由の
+/// 指定は**足には一切届かない**（指令 0.3 m/s の 8 s 走行で μ 0.1 と μ 0.8 の
+/// 軌跡がビット単位で一致する、という形で出る）。torsional / rolling 成分は
+/// .misa の値のまま残す（Python 参照プラントの `0.02 / 0.01` と同じ）。
+fn rewrite_misa(text: &str, damping: f64, friction: Option<f64>) -> (String, usize, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut joints = 0usize;
+    let mut contacts = 0usize;
+    // go2.misa には `*_foot_fixed`（type = "fixed"、damping = 0）も damping の
+    // 行を持つ。固定ジョイントに自由度は無いので書き換えても物理は変わらない
+    // が、件数の表示が誤解を招くので可動関節だけを対象にする。ブロック内の
+    // 並びは name → type → …→ damping なので、直近の type を見れば判る。
+    let mut in_fixed = false;
+    let mut i = 0usize;
+    while i < lines.len() {
+        let line = lines[i];
+        let t = line.trim_start();
+        if t.starts_with("[[") {
+            in_fixed = false;
+        } else if t.starts_with("type") && t.contains('=') {
+            in_fixed = t.contains("\"fixed\"");
+        }
+        let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+        if !in_fixed && t.starts_with("damping") && line.contains('=') {
+            out.push_str(&format!("{indent}damping = {damping}\n"));
+            joints += 1;
+        } else if friction.is_some() && t.starts_with("friction") && t.contains('[') {
+            // 配列形だけが接触摩擦。関節の乾性摩擦はスカラ（`friction = 0.0`）
+            // なので、`[` の有無で見分ける。
+            let mu = friction.unwrap();
+            if let Some(rest) = t.split_once('[').map(|(_, r)| r) {
+                if rest.contains(']') {
+                    // 1 行形: friction = [0.8, 0.02, 0.01]
+                    let inner = rest.split(']').next().unwrap_or("");
+                    let tail: Vec<&str> = inner.split(',').skip(1).collect();
+                    out.push_str(&format!("{indent}friction = [{mu}"));
+                    for x in tail {
+                        out.push(',');
+                        out.push_str(x);
+                    }
+                    out.push_str("]\n");
+                    contacts += 1;
+                } else {
+                    // 複数行形: 次の非空行が slide 成分。
+                    out.push_str(line);
+                    out.push('\n');
+                    i += 1;
+                    while i < lines.len() && lines[i].trim().is_empty() {
+                        out.push_str(lines[i]);
+                        out.push('\n');
+                        i += 1;
+                    }
+                    if i < lines.len() {
+                        let vindent: String =
+                            lines[i].chars().take_while(|c| c.is_whitespace()).collect();
+                        let comma = if lines[i].trim_end().ends_with(',') { "," } else { "" };
+                        out.push_str(&format!("{vindent}{mu}{comma}\n"));
+                        contacts += 1;
+                    }
+                }
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+        i += 1;
+    }
+    (out, joints, contacts)
+}
+
+/// `--joint-damping` / `--friction` 用に書き換えた .misa の一時コピーを作る。
 ///
 /// go2.misa の `damping = 2.0` は MuJoCo Menagerie の go2.xml
 /// （`<joint damping="2" armature="0.01" frictionloss="0.2"/>`）由来で、
@@ -106,56 +185,52 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
 /// なり、実機の Go2 が 2.5 m/s 以上出せる事実と両立しない。学習側（Isaac）は
 /// 受動粘性ゼロで、V50/V100 は U(0,2) でランダム化して両端に耐えさせている。
 /// ここを実機寄り（0.1〜0.5 程度）にすると sim でも高速側が出る。
-fn misa_with_damping(misa_path: &str, damping: f64) -> Result<String, String> {
+fn misa_with_overrides(
+    misa_path: &str,
+    damping: f64,
+    friction: Option<f64>,
+) -> Result<String, String> {
     let text =
         std::fs::read_to_string(misa_path).map_err(|e| format!("{misa_path} を読めません: {e}"))?;
-    let mut out = String::with_capacity(text.len());
-    let mut hits = 0usize;
-    // go2.misa には `*_foot_fixed`（type = "fixed"、damping = 0）も damping の
-    // 行を持つ。固定ジョイントに自由度は無いので書き換えても物理は変わらない
-    // が、件数の表示が誤解を招くので可動関節だけを対象にする。ブロック内の
-    // 並びは name → type → …→ damping なので、直近の type を見れば判る。
-    let mut in_fixed = false;
-    for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with("[[") {
-            in_fixed = false;
-        } else if t.starts_with("type") && t.contains('=') {
-            in_fixed = t.contains("\"fixed\"");
-        }
-        if !in_fixed && t.starts_with("damping") && line.contains('=') {
-            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-            out.push_str(&format!("{indent}damping = {damping}\n"));
-            hits += 1;
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    if hits == 0 {
+    let (out, joints, contacts) = rewrite_misa(&text, damping, friction);
+    if joints == 0 {
         return Err(format!("{misa_path} に damping の行が見つかりません"));
     }
+    if friction.is_some() && contacts == 0 {
+        return Err(format!(
+            "{misa_path} に接触 geom の friction 配列が見つかりません — \
+             --friction は当てられません（このモデルでは無指定にしてください）"
+        ));
+    }
+    let tag = match friction {
+        Some(mu) => format!("damp{damping}_mu{mu}"),
+        None => format!("damp{damping}"),
+    };
     let stem = std::path::Path::new(misa_path)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("model");
-    let path = std::env::temp_dir().join(format!("{stem}_damp{damping}.misa"));
+    let path = std::env::temp_dir().join(format!("{stem}_{tag}.misa"));
     std::fs::write(&path, out).map_err(|e| format!("一時 .misa を書けません: {e}"))?;
+    let note = match friction {
+        Some(mu) => format!(
+            "受動粘性を {damping} N·m·s/rad（{joints} 関節）、\
+             接地摩擦の slide 成分を {mu}（{contacts} 面）に差し替えました"
+        ),
+        None => format!("受動粘性を {damping} N·m·s/rad に差し替えました（{joints} 関節）"),
+    };
     // メッシュは .misa からの相対パスで引かれるので、元と同じディレクトリに
     // 置けない場合は解決できない。そこで元ディレクトリに置き直す。
     let side = std::path::Path::new(misa_path)
         .parent()
-        .map(|d| d.join(format!(".{stem}_damp{damping}.misa")));
+        .map(|d| d.join(format!(".{stem}_{tag}.misa")));
     if let Some(side) = side {
         if std::fs::copy(&path, &side).is_ok() {
-            eprintln!(
-                "policy-sim: 受動粘性を {damping} N·m·s/rad に差し替えました（{hits} 関節、\
-                 {} を使用）",
-                side.display()
-            );
+            eprintln!("policy-sim: {note}（{} を使用）", side.display());
             return Ok(side.to_string_lossy().into_owned());
         }
     }
+    eprintln!("policy-sim: {note}");
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -206,7 +281,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 受動粘性ゼロなので、既定はメーカー値に寄せる。Menagerie の保守値で
     // 頑健性を見たいときは --joint-damping 2.0。
     let damping = a.joint_damping.unwrap_or(DEFAULT_JOINT_DAMPING);
-    let misa_path = misa_with_damping(&a.misa, damping)?;
+    let misa_path = misa_with_overrides(&a.misa, damping, a.friction)?;
     let opts = SimOptions {
         misa_path: misa_path.clone(),
         control_period_s: CONTROL_DT,
@@ -227,6 +302,10 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // 4.5 m 流れ、脚オドメトリが真値の 1/3 しか出ず（滑りの分だけ足が
         // 空回りする）、1.0 では 1〜3 s で転倒していた。粘性を 0.1 まで
         // 下げても直らなかったので、原因は粘性ではなく接触側。
+        // これは `<default><geom friction=…/>` にしか入らない — 明示の
+        // friction を持つ geom（go2.misa の足、しかも priority = 1）には
+        // 届かないので、足の分は misa_with_overrides が .misa 側で当てる。
+        // ここは friction を書いていない geom のための既定値。
         friction: Some(a.friction.map_or([0.8, 0.02, 0.01], |mu| [mu, 0.02, 0.01])),
         impratio: Some(a.impratio.unwrap_or(100.0)),
         cone: Some(a.cone.clone().unwrap_or_else(|| "elliptic".into())),
@@ -599,5 +678,71 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     match fell {
         Some(reason) => Err(format!("policy-sim: {reason}")),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_misa;
+
+    const SAMPLE: &str = r#"[[link.joint]]
+name = "FL_hip_joint"
+type = "revolute"
+damping = 2.0
+friction = 0.0
+
+[[link.joint]]
+name = "FL_foot_fixed"
+type = "fixed"
+damping = 0.0
+
+[[link.collision]]
+
+[link.collision.physics]
+friction = [
+    0.8,
+    0.02,
+    0.01,
+]
+priority = 1
+"#;
+
+    /// 可動関節の粘性だけを書き換え、固定ジョイントは数えない（既存の挙動）。
+    #[test]
+    fn damping_touches_only_movable_joints() {
+        let (out, joints, _) = rewrite_misa(SAMPLE, 0.1, None);
+        assert_eq!(joints, 1);
+        assert!(out.contains("damping = 0.1"));
+        assert!(out.contains("damping = 0.0"), "固定ジョイントはそのまま");
+    }
+
+    /// 接触 geom の slide 成分だけを差し替える。torsional / rolling と、
+    /// 関節の乾性摩擦（スカラの `friction = 0.0`）には触らない。
+    #[test]
+    fn friction_rewrites_the_slide_component_of_contact_geoms_only() {
+        let (out, _, contacts) = rewrite_misa(SAMPLE, 0.1, Some(0.4));
+        assert_eq!(contacts, 1);
+        assert!(out.contains("    0.4,\n"), "slide 成分: {out}");
+        assert!(out.contains("    0.02,"), "torsional はそのまま");
+        assert!(out.contains("    0.01,"), "rolling はそのまま");
+        assert!(out.contains("friction = 0.0"), "関節の乾性摩擦はそのまま");
+        assert!(!out.contains("    0.8,"), "元の slide が残っている: {out}");
+    }
+
+    /// 摩擦を指定しなければ .misa の接触摩擦は一切変わらない。
+    #[test]
+    fn without_friction_the_contacts_are_untouched() {
+        let (out, _, contacts) = rewrite_misa(SAMPLE, 0.1, None);
+        assert_eq!(contacts, 0);
+        assert!(out.contains("    0.8,"));
+    }
+
+    /// 1 行形の配列でも slide 成分だけを差し替える。
+    #[test]
+    fn single_line_friction_array_is_rewritten_in_place() {
+        let text = "damping = 2.0\nfriction = [0.8, 0.02, 0.01]\n";
+        let (out, joints, contacts) = rewrite_misa(text, 0.1, Some(0.4));
+        assert_eq!((joints, contacts), (1, 1));
+        assert_eq!(out, "damping = 0.1\nfriction = [0.4, 0.02, 0.01]\n");
     }
 }
