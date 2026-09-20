@@ -397,6 +397,8 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut vx_sum = 0.0f64;
     let mut vy_sum = 0.0f64;
     let mut vx_n = 0u64;
+    let mut vx_world_sum = 0.0f64;
+    let mut vy_world_sum = 0.0f64;
     let mut vx_truth_sum = 0.0f64;
     let mut vy_truth_sum = 0.0f64;
     let mut wz_truth_sum = 0.0f64;
@@ -545,14 +547,23 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 track_err_max = track_err_max.max(e);
             }
             let odom_vel = odom.vel_world();
-            vx_sum += odom_vel[0];
-            vy_sum += odom_vel[1];
             let truth_vel = plant
                 .sim()
                 .body_world_linear_velocity("base")
                 .unwrap_or([0.0; 3]);
-            vx_truth_sum += truth_vel[0];
-            vy_truth_sum += truth_vel[1];
+            // **指令は体座標系なので、追従は体座標系で測る。** 世界系のまま
+            // 平均すると、方策がヨーに流れている間は前進が過小に、横が過大に
+            // 出る（円弧を描くだけで「横に流れている」ように見える）。
+            // Python 参照の metrics["mean_velocity"] も quat_rotate_inverse を
+            // 通した体座標系で、比較はこちらでないと成立しない。
+            let odom_body = world_to_body(&inp.quat_wxyz, odom_vel);
+            let truth_body = world_to_body(&inp.quat_wxyz, truth_vel);
+            vx_sum += odom_body[0];
+            vy_sum += odom_body[1];
+            vx_truth_sum += truth_body[0];
+            vy_truth_sum += truth_body[1];
+            vx_world_sum += truth_vel[0];
+            vy_world_sum += truth_vel[1];
             wz_truth_sum += inp.gyro_rad_s[2];
             vx_n += 1;
             for (leg, candidate) in odom.candidates_world().iter().enumerate() {
@@ -633,7 +644,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let base = plant.base_position().unwrap_or([0.0; 3]);
     eprintln!(
         "\npolicy-sim: {:.1} s / 変位 ({:+.2}, {:+.2}) m / 最終高さ {:.3} m / \
-         追従誤差 max {:.3} rad / v̄x(t≥2s) 真値 {:+.3} / オドメトリ {:+.3} m/s",
+         追従誤差 max {:.3} rad / v̄x(t≥2s, 体系) 真値 {:+.3} / オドメトリ {:+.3} m/s",
         k as f64 * CONTROL_DT,
         base[0],
         base[1],
@@ -648,10 +659,17 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     );
     if vx_n > 0 {
         eprintln!(
-            "policy-sim: v̄y(t≥2s) 真値 {:+.3} / オドメトリ {:+.3} m/s / ω̄z {:+.3} rad/s",
+            "policy-sim: v̄y(t≥2s, 体系) 真値 {:+.3} / オドメトリ {:+.3} m/s / ω̄z {:+.3} rad/s",
             vy_truth_sum / vx_n as f64,
             vy_sum / vx_n as f64,
             wz_truth_sum / vx_n as f64,
+        );
+        // 世界系も出す。体系と大きく食い違うときは方策がヨーに流れている
+        // （円弧を描いている）という意味で、横に流されているのとは別物。
+        eprintln!(
+            "policy-sim: 参考 v̄(t≥2s, 世界系) 真値 ({:+.3}, {:+.3}) m/s",
+            vx_world_sum / vx_n as f64,
+            vy_world_sum / vx_n as f64,
         );
     }
     eprintln!(
