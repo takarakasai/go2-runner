@@ -210,6 +210,15 @@ GO2_VIZ_ENDPOINT=tcp/127.0.0.1:7448 ./scripts/policy_sim.sh   # articara 側も 
   103 %、横流れが −0.12 m → +0.01 m（12 s）になり Python 側の数値と一致した。
   `--impratio` / `--cone` / `--friction` で触れる。
 
+  **指令のレート制限（2026-09-20 追加）**: 学習側は全ての指令変化を
+  0.5 m/s² / 0.7 rad/s² で制限しているので、ランタイムも既定で同じ制限を
+  掛ける（`--cmd-accel` / `--cmd-yaw-accel`、0 で無効）。これが無いと数字キーや
+  `--vx 1.0` が 1 tick で飛び、**GRU 親は 0→0.9 で 1.31 s、0→1.0 で 0.83 s で
+  転倒**していた。制限を入れると同じ ONNX が 1.0 → 1.010 m/s（101 %）、
+  1.2 → 1.185 m/s（99 %）で 15 s 走る。Isaac では同じステップでも 64/64 生存
+  するので、これは学習器では見えない転移側の穴（go2_rl
+  `doc/gru_command_step_transfer_20260921.md`）。
+
   **`--friction` は 2026-09-20 まで足に届いていなかった**（μ 0.1 と 0.8 で
   軌跡がビット単位で一致する、という形で出た）。`SimOptions::friction` は
   MJCF の `<default><geom friction=…/>` にしか入らないのに、go2.misa の足

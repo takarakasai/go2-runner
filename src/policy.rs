@@ -103,6 +103,13 @@ pub(crate) struct Args {
     /// GRU 契約の凍結速度推定器（6×73 → 3）。再帰グラフには必須で、
     /// `--gru-host-velocity` を付けたときだけ省ける。
     pub estimator: Option<String>,
+    /// 指令の加速度上限（m/s²、0 で無効）。既定は**学習側と同じ 0.5**。
+    /// 学習の指令生成（mit_rl commands_custom RampedHighSpeedVelocityCommand）は
+    /// 全ての指令変化を 0.5 m/s² / 0.7 rad/s² で制限している。ランタイムは
+    /// これまで制限せず、数字キーや --vx が 1 tick で飛んでいた。
+    pub cmd_accel: f64,
+    /// 指令ヨー加速度の上限（rad/s²、0 で無効）。学習側は 0.7。
+    pub cmd_yaw_accel: f64,
     /// GRU 契約の速度入力を推定器ではなく脚オドメトリにする（診断用）。
     /// 契約から外れる — 別の入力分布になる（doc/gru_deploy.md）。
     pub gru_host_velocity: bool,
@@ -131,6 +138,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         odom_calibrated: false,
         estimator: None,
         gru_host_velocity: false,
+        cmd_accel: 0.5,
+        cmd_yaw_accel: 0.7,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -189,6 +198,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 out.estimator = Some(it.next().ok_or("--estimator に値がありません")?.clone())
             }
             "--gru-host-velocity" => out.gru_host_velocity = true,
+            "--cmd-accel" => out.cmd_accel = val(&mut it, "--cmd-accel")?,
+            "--cmd-yaw-accel" => out.cmd_yaw_accel = val(&mut it, "--cmd-yaw-accel")?,
             "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
             "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
@@ -408,6 +419,47 @@ impl Ctl {
             Ctl::Pure(_) | Ctl::Gru(_) => [0.0; 12],
         }
     }
+}
+
+/// 指令のレート制限 — **学習側の指令生成と同じ処方**。
+///
+/// mit_rl の `RampedHighSpeedVelocityCommand` は全ての指令変化を平面
+/// 0.5 m/s² / ヨー 0.7 rad/s² で制限していて、方策はステップ指令を学習中に
+/// 一度も見ていない。ランタイム側は制限していなかったので、数字キー
+/// （VX_PRESETS）や `--vx 1.0` が 1 tick で飛んでいた。
+///
+/// これが実害になることは go2.misa（粘性 0.1、足摩擦 0.8、elliptic/impratio
+/// 100）で測れる: GRU 親 model_49 は 0→0.8 m/s のステップなら 15 s 走る
+/// （追従 102 %）が、**0→0.9 は 1.31 s、0→1.0 は 0.83 s で転倒**（roll 57°）。
+/// 同じ 1.0 m/s でもランプで入れれば走り続ける。なお Isaac では同じステップで
+/// 64/64 生存（最大傾き 5.5°）なので、これは学習器では見えない転移側の穴。
+pub(crate) fn rate_limit_cmd(
+    current: [f64; 3],
+    target: [f64; 3],
+    accel: f64,
+    yaw_accel: f64,
+    dt: f64,
+) -> [f64; 3] {
+    let mut out = current;
+    if accel > 0.0 {
+        let d = [target[0] - current[0], target[1] - current[1]];
+        let norm = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        if norm > 1.0e-12 {
+            let scale = (accel * dt / norm).min(1.0);
+            out[0] += d[0] * scale;
+            out[1] += d[1] * scale;
+        }
+    } else {
+        out[0] = target[0];
+        out[1] = target[1];
+    }
+    if yaw_accel > 0.0 {
+        let step = yaw_accel * dt;
+        out[2] += (target[2] - current[2]).clamp(-step, step);
+    } else {
+        out[2] = target[2];
+    }
+    out
 }
 
 /// ワールド系ベクトルを体座標系へ（v_b = R(q)ᵀ v_w、q は w,x,y,z）。
@@ -641,6 +693,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         eprintln!("policy: RUNNING\r");
     }
 
+    // 指令は 0 から学習時と同じレートで立ち上げる（--cmd-accel 0 で無効）。
+    let mut cmd_applied = [0.0f64; 3];
+    if a.cmd_accel > 0.0 || a.cmd_yaw_accel > 0.0 {
+        eprintln!(
+            "policy: 指令を {:.2} m/s² / {:.2} rad/s² で制限します（学習側と同じ。\
+             解除は --cmd-accel 0 --cmd-yaw-accel 0）\r",
+            a.cmd_accel, a.cmd_yaw_accel
+        );
+    }
     let mut k: u64 = 0;
     'run: while !quit.load(Ordering::Relaxed) {
         if let Some(d) = a.duration {
@@ -649,7 +710,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
         }
         plant.poll_state()?;
-        let cmd_now = *cmd.lock().unwrap();
+        let cmd_target = *cmd.lock().unwrap();
         let (inp, q_isaac_meas, dq_go2) = {
             let s = plant.last_state().ok_or("LowState がありません")?;
             let inp = obs_input_from(s);
@@ -701,8 +762,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
         // 50 Hz: 推論。失敗は直前の指令を保持。
         if !a.hold && k % DECIMATION == 0 {
+            cmd_applied = rate_limit_cmd(
+                cmd_applied,
+                cmd_target,
+                a.cmd_accel,
+                a.cmd_yaw_accel,
+                CONTROL_DT * DECIMATION as f64,
+            );
             let vel_body = world_to_body(&inp.quat_wxyz, odom.vel_world());
-            match ctl.tick(&inp, cmd_now, vel_body) {
+            match ctl.tick(&inp, cmd_applied, vel_body) {
                 Ok(t) => {
                     if t.anomalies.is_empty() {
                         faults = 0;
@@ -734,7 +802,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let tau_isaac = if a.hold {
             [0.0; 12]
         } else {
-            ctl.support_torque(&base, cmd_now, &q_isaac_meas)
+            ctl.support_torque(&base, cmd_applied, &q_isaac_meas)
         };
 
         // Isaac → Go2 順へ。τ_ff は学習時のトルク包絡で二重クランプ。
@@ -768,9 +836,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             eprint!(
                 "\rpolicy: t={:6.1}s cmd=({:+.2},{:+.2},{:+.2}) v=({:+.2},{:+.2}) h={:.2}m tilt={:4.1}°   ",
                 ctl.gait_time_s(),
-                cmd_now[0],
-                cmd_now[1],
-                cmd_now[2],
+                cmd_applied[0],
+                cmd_applied[1],
+                cmd_applied[2],
                 base.vel_world[0],
                 base.vel_world[1],
                 base.height_m,

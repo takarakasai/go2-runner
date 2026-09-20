@@ -31,7 +31,7 @@ use misa_runner::viz;
 
 use crate::estimator::LegOdometry;
 use crate::go2_plant::{go2_axes, MISA_TO_GO2};
-use crate::policy::{cmd_clamp, spawn_keyboard, world_to_body, Args, Ctl};
+use crate::policy::{cmd_clamp, rate_limit_cmd, spawn_keyboard, world_to_body, Args, Ctl};
 
 const CONTROL_DT: f64 = 0.002;
 const DECIMATION: u64 = 10;
@@ -387,6 +387,8 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             "policy-sim: GO2_SIM_TRUTH_VEL=1 — 体速度入力に MuJoCo の真値を使います（診断用）"
         );
     }
+    // 学習側と同じレートで指令を立ち上げる（--cmd-accel 0 で無効）。
+    let mut cmd_applied = [0.0f64; 3];
     let mut held: PolicyTick = ctl.hold();
     let mut faults: u32 = 0;
     let mut fell: Option<String> = None;
@@ -420,7 +422,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 break;
             }
         }
-        let cmd_now = *cmd.lock().unwrap();
+        let cmd_target = *cmd.lock().unwrap();
 
         // ── 観測 → ObsInput（実機は LowState から、ここは Observation から）──
         let imu = obs.imu.ok_or("MuJoCo が IMU を返しません")?;
@@ -490,7 +492,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 odom.vel_world()
             };
             let vel_body = world_to_body(&inp.quat_wxyz, vel_world);
-            match ctl.tick(&inp, cmd_now, vel_body) {
+            cmd_applied = rate_limit_cmd(
+                cmd_applied,
+                cmd_target,
+                a.cmd_accel,
+                a.cmd_yaw_accel,
+                CONTROL_DT * DECIMATION as f64,
+            );
+            match ctl.tick(&inp, cmd_applied, vel_body) {
                 Ok(tk) => {
                     if !tk.anomalies.is_empty() {
                         faults += 1;
@@ -519,7 +528,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             gyro_rad_s: inp.gyro_rad_s,
             height_m: odom.height_m(),
         };
-        let tau_isaac = ctl.support_torque(&base_state, cmd_now, &q_isaac_meas);
+        let tau_isaac = ctl.support_torque(&base_state, cmd_applied, &q_isaac_meas);
         // DCMotor のトルク-速度カーブは τ_ff にだけかける。学習時（Isaac）と
         // Python 側 sim2sim は PD と τ_ff の**合計**にかけるので厳密には形が
         // 違うが、PD を自分で計算して合計をクリップし純トルク指令で送る版を
@@ -630,9 +639,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         if status.elapsed().as_secs_f64() > 0.5 {
             eprint!(
                 "\rpolicy-sim: t={t:6.1}s cmd=({:+.2},{:+.2},{:+.2}) v̂x={:+.2}m/s xy=({:+.2},{:+.2})m z={:.3}m rp=({:+4.1}°,{:+4.1}°)   ",
-                cmd_now[0],
-                cmd_now[1],
-                cmd_now[2],
+                cmd_applied[0],
+                cmd_applied[1],
+                cmd_applied[2],
                 odom.vel_world()[0],
                 base[0],
                 base[1],
