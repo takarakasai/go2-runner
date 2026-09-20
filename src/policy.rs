@@ -8,10 +8,20 @@
 //! ```text
 //! go2-run policy --model exported/policy.onnx [--iface eth0]
 //!                [--vx V] [--vy V] [--wz W] [--duration S]
-//!                [--stride-gain 1.55] [--yaw-stride-gain 2.0] [--body-height 0.30]
+//!                [--stride-gain 1.55] [--yaw-stride-gain 2.0]
+//!                [--body-height 0.30 | --low-stance]
 //!                [--vx-max 0.6] [--joint-damping 0.2] [--hold]
 //!                [--no-keyboard] [--no-release]
 //! ```
+//!
+//! 立位高さ: `--body-height` は旋回ストライドゲインを自動で較正し直す
+//! (`TrajectoryCfg::with_height`)。低くすると同じ方策が旋回を過追従する
+//! ため（0.21 m で 133%）で、明示の `--yaw-stride-gain` があればそちらが
+//! 優先される。`--low-stance` は推奨の 0.22 m / 1.644 の別名。
+//! 同じ ONNX のまま立位の押し耐性が 11% → 60%、耐力が体重比 0.37 →
+//! 0.54–0.80 に上がり、学習範囲内 (|vx| ≤ 0.16 m/s) の追従は同等以上。
+//! 代償は腹下クリアランスが 8 cm 減ること。段差を越える場面では 0.30 m
+//! に戻す（go2_rl `doc/push_robustness.md` §7）。
 //!
 //! 段取り（go2-gait-runner の policy モードで実証済みの形）:
 //!   A. sport_mode 解除 → 実測姿勢から方策の既定姿勢へ 3 s ランプ（kp 0→45）
@@ -118,6 +128,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             .parse()
             .map_err(|e| format!("{name}: {e}"))
     }
+    // --body-height recalibrates the yaw stride gain (misa_policy_runner
+    // TrajectoryCfg::with_height). An explicit --yaw-stride-gain wins,
+    // whatever the flag order.
+    let mut yaw_gain_pinned = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -129,9 +143,24 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--duration" => out.duration = Some(val(&mut it, "--duration")?),
             "--stride-gain" => out.cfg.stride_gain = val(&mut it, "--stride-gain")?,
             "--yaw-stride-gain" => {
-                out.cfg.yaw_stride_gain = Some(val(&mut it, "--yaw-stride-gain")?)
+                out.cfg.yaw_stride_gain = Some(val(&mut it, "--yaw-stride-gain")?);
+                yaw_gain_pinned = true;
             }
-            "--body-height" => out.cfg.body_height = Some(val(&mut it, "--body-height")?),
+            "--body-height" => {
+                let h = val(&mut it, "--body-height")?;
+                let pinned = out.cfg.yaw_stride_gain;
+                out.cfg = out.cfg.with_height(h);
+                if yaw_gain_pinned {
+                    out.cfg.yaw_stride_gain = pinned;
+                }
+            }
+            "--low-stance" => {
+                let pinned = out.cfg.yaw_stride_gain;
+                out.cfg = TrajectoryCfg::h30_low_stance();
+                if yaw_gain_pinned {
+                    out.cfg.yaw_stride_gain = pinned;
+                }
+            }
             "--hold" => out.hold = true,
             "--no-keyboard" => out.keyboard = false,
             "--no-release" => out.release = false,
@@ -699,5 +728,68 @@ pub fn run(args: &[String]) -> Result<(), String> {
     match abort {
         Some(reason) => Err(format!("policy: {reason}")),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod stance_tests {
+    use super::*;
+
+    fn parse_ok(args: &[&str]) -> Args {
+        let v: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        parse(&v).expect("parse")
+    }
+
+    /// Without a height flag the deploy standard is unchanged: 0.30 m, yaw 2.0.
+    #[test]
+    fn default_is_the_h30_standard() {
+        let a = parse_ok(&["--model", "p.onnx"]);
+        assert_eq!(a.cfg.body_height, Some(0.30));
+        assert_eq!(a.cfg.yaw_stride_gain, Some(2.0));
+    }
+
+    /// --body-height recalibrates the yaw gain; the policy over-tracks yaw
+    /// when crouched if it does not (133% at 0.21 m).
+    #[test]
+    fn body_height_recalibrates_the_yaw_gain() {
+        let a = parse_ok(&["--model", "p.onnx", "--body-height", "0.24"]);
+        assert_eq!(a.cfg.body_height, Some(0.24));
+        assert!((a.cfg.yaw_stride_gain.unwrap() - 1.733).abs() < 1e-3);
+        assert_eq!(a.cfg.stride_gain, 1.55);
+    }
+
+    /// --low-stance is the recommended 0.22 m configuration.
+    #[test]
+    fn low_stance_is_022() {
+        let a = parse_ok(&["--model", "p.onnx", "--low-stance"]);
+        assert_eq!(a.cfg.body_height, Some(0.22));
+        assert!((a.cfg.yaw_stride_gain.unwrap() - 1.644).abs() < 1e-3);
+    }
+
+    /// An explicit --yaw-stride-gain wins over the schedule, in EITHER order.
+    #[test]
+    fn explicit_yaw_gain_wins_whatever_the_order() {
+        for args in [
+            vec!["--model", "p.onnx", "--body-height", "0.24", "--yaw-stride-gain", "2.0"],
+            vec!["--model", "p.onnx", "--yaw-stride-gain", "2.0", "--body-height", "0.24"],
+        ] {
+            let a = parse_ok(&args);
+            assert_eq!(a.cfg.body_height, Some(0.24), "{args:?}");
+            assert_eq!(a.cfg.yaw_stride_gain, Some(2.0), "{args:?}");
+        }
+    }
+
+    /// Heights outside the measured range are clamped, never extrapolated:
+    /// below 0.21 m the speed envelope breaks down.
+    #[test]
+    fn out_of_range_height_is_clamped() {
+        assert_eq!(
+            parse_ok(&["--model", "p.onnx", "--body-height", "0.15"]).cfg.body_height,
+            Some(0.21)
+        );
+        assert_eq!(
+            parse_ok(&["--model", "p.onnx", "--body-height", "0.40"]).cfg.body_height,
+            Some(0.31)
+        );
     }
 }

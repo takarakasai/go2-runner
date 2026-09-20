@@ -20,8 +20,18 @@ fi
 export MUJOCO_DYNAMIC_LINK_DIR="${MUJOCO_DYNAMIC_LINK_DIR:-$HOME/.mujoco/mujoco-3.8.0/lib}"
 # libmujoco は cargo run でも自動では載らない（libddsc は載る）。
 export LD_LIBRARY_PATH="$MUJOCO_DYNAMIC_LINK_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-MODEL="${1:-$HOME/work/dp/go2_rl/logs/rsl_rl/go2_mit_natural_h30/2026-09-12_14-27-39_h30_v1/exported/policy.onnx}"
+# 既定は Pure76 の推奨チェックポイント Grip2（go2_rl doc/mit_pure.md）。
+# ネットワーク 1 枚だけで全方向 + 1 m/s まで出て、接触点滑りが Rival の半分。
+# 別のモデルは第1引数か GO2_POLICY で渡す。
+DEFAULT_MODEL="$HOME/work/dp/go2_rl/logs/rsl_rl/go2_mit_pure_vel_grip2/2026-09-14_00-12-30_grip2_norm/exported/policy.onnx"
+MODEL="${1:-${GO2_POLICY:-$DEFAULT_MODEL}}"
 [ $# -gt 0 ] && shift
+if [ ! -f "$MODEL" ]; then
+  echo "ONNX が見つかりません: $MODEL" >&2
+  echo "学習済みモデルはこのリポジトリに入っていない。go2_rl 側の" >&2
+  echo "logs/rsl_rl/<実験名>/<run>/exported/policy.onnx を第1引数か GO2_POLICY で渡す。" >&2
+  exit 1
+fi
 # 7447 が別のもの（前回の go2-run、Listen 側の articara、zenohd）に取られて
 # いるときは GO2_VIZ_ENDPOINT で番号を変えられる。articara 側も同じ番号に。
 VIZ_EP="${GO2_VIZ_ENDPOINT:-tcp/127.0.0.1:7447}"

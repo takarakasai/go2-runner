@@ -2382,7 +2382,7 @@ velocity = 5.0
 
 [joint.dynamics]
 armature = 0.0014
-damping = 2
+damping = 0.0
 friction = 0.0
 
 [[joint]]
@@ -2416,7 +2416,7 @@ velocity = 5.0
 
 [joint.dynamics]
 armature = 0.0014
-damping = 2
+damping = 0.0
 friction = 0.0
 
 [[joint]]
@@ -2450,7 +2450,7 @@ velocity = 5.0
 
 [joint.dynamics]
 armature = 0.0014
-damping = 2
+damping = 0.0
 friction = 0.0
 
 [[joint]]
@@ -2484,7 +2484,7 @@ velocity = 5.0
 
 [joint.dynamics]
 armature = 0.0014
-damping = 2
+damping = 0.0
 friction = 0.0
 
 [[collision_pair]]
