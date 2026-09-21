@@ -113,6 +113,15 @@ pub(crate) struct Args {
     /// GRU 契約の速度入力を推定器ではなく脚オドメトリにする（診断用）。
     /// 契約から外れる — 別の入力分布になる（doc/gru_deploy.md）。
     pub gru_host_velocity: bool,
+    /// Diagnostic mirrored GRU calf-position blend. Zero keeps the trained contract.
+    pub gru_symmetric_calf_weight: f64,
+    /// Diagnostic low-speed vx scaling fed to the GRU and estimator; tapers to 1 at 0.6 m/s.
+    pub gru_vx_gain: f64,
+    /// 世界系ヨーの PI 方位保持 `(KP, KI)`。直進指令（|wz| < 0.05）の間、IMU の
+    /// ヨーを「操作開始時のヨー + ∫指令 wz」に保つ補正を wz 指令へ足す。方策は
+    /// 変えない。go2_rl/doc/gru_straightness_heading_servo_20260921.md: 親 GRU の
+    /// 横流れが 1.0 m/s で −9.5 → −0.2 m、速度・姿勢の代償なし。推奨 2.0 0.5。
+    pub heading_hold: Option<(f64, f64)>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -138,8 +147,11 @@ fn parse(args: &[String]) -> Result<Args, String> {
         odom_calibrated: false,
         estimator: None,
         gru_host_velocity: false,
+        gru_symmetric_calf_weight: 0.0,
+        gru_vx_gain: 1.0,
         cmd_accel: 0.5,
         cmd_yaw_accel: 0.7,
+        heading_hold: None,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -198,8 +210,20 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 out.estimator = Some(it.next().ok_or("--estimator に値がありません")?.clone())
             }
             "--gru-host-velocity" => out.gru_host_velocity = true,
+            "--gru-symmetric-calf-weight" => {
+                out.gru_symmetric_calf_weight = val(&mut it, "--gru-symmetric-calf-weight")?
+            }
+            "--gru-vx-gain" => out.gru_vx_gain = val(&mut it, "--gru-vx-gain")?,
             "--cmd-accel" => out.cmd_accel = val(&mut it, "--cmd-accel")?,
             "--cmd-yaw-accel" => out.cmd_yaw_accel = val(&mut it, "--cmd-yaw-accel")?,
+            "--heading-hold" => {
+                let kp = val(&mut it, "--heading-hold KP")?;
+                let ki = val(&mut it, "--heading-hold KI")?;
+                if !(kp >= 0.0 && ki >= 0.0) || !(kp > 0.0 || ki > 0.0) {
+                    return Err("--heading-hold KP KI は非負で、少なくとも一方が正".into());
+                }
+                out.heading_hold = Some((kp, ki));
+            }
             "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
             "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
             other => return Err(format!("policy: 知らないオプション {other:?}")),
@@ -233,6 +257,9 @@ pub(crate) enum Ctl {
 
 impl Ctl {
     pub(crate) fn load(a: &Args) -> Result<Self, String> {
+        if !a.sim && (a.gru_symmetric_calf_weight != 0.0 || a.gru_vx_gain != 1.0) {
+            return Err("mirrored GRU blend and vx calibration are SIM diagnostics only".into());
+        }
         if graph_input_arity(&a.model)? == 2 {
             let policy = RecurrentOnnxPolicy::load(&a.model, 76, 128, 36)?;
             let velocity = if a.gru_host_velocity {
@@ -252,7 +279,15 @@ impl Ctl {
                 )?;
                 VelocitySource::Estimator(HistoryVelocityEstimator::load(path)?)
             };
-            return PureGruController::new(policy, velocity).map(Ctl::Gru);
+            let mut ctl = PureGruController::new(policy, velocity)?;
+            ctl.configure_symmetric_calf(a.gru_symmetric_calf_weight, a.gru_vx_gain)?;
+            if a.gru_symmetric_calf_weight > 0.0 || a.gru_vx_gain != 1.0 {
+                eprintln!("policy: diagnostic mirrored GRU calf blend weight {:.3}, vx input gain {:.3}; separate mirrored hidden state", a.gru_symmetric_calf_weight, a.gru_vx_gain);
+            }
+            return Ok(Ctl::Gru(ctl));
+        }
+        if a.gru_symmetric_calf_weight != 0.0 || a.gru_vx_gain != 1.0 {
+            return Err("GRU diagnostic blend/gain flags require a 2-input GRU graph".into());
         }
         let mut errs = Vec::new();
         for n in [39usize, 73, 76] {
@@ -421,6 +456,112 @@ impl Ctl {
     }
 }
 
+/// 体→世界クォータニオン (w,x,y,z) のヨー角。
+pub(crate) fn yaw_from_quat_wxyz(q: &[f64; 4]) -> f64 {
+    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+    (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z))
+}
+
+fn wrap_pi(a: f64) -> f64 {
+    a.sin().atan2(a.cos())
+}
+
+/// 世界系ヨーの PI 方位保持 — 方策の**外側**に置く積分器。
+///
+/// 方策はリセット時にヨーを乱数化されて世界系の方位参照を持たず、GRU に
+/// 「開始ヨーの記憶 + 積分」を求める報酬では 2 日 8 本の一因子で最大 −34 %
+/// （代償付き）だった。積分器を外に置けば厳密で、実機の IMU ヨーがそのまま
+/// 参照になる。親 model_49、go2.xml 参照プラント、KP 2 / KI 0.5、15 s:
+/// 横流れ 0.3: −1.24 → +0.11 m、1.0: −9.47 → −0.21、1.5: −14.38 → −0.50、
+/// 速度・tilt 不変、補正 0.08〜0.17 rad/s（学習分布 ±0.8 の 1/5 以下）。
+/// 粘性 2.0 / μ 0.4 でも同様、KP 4 / KI 2 まで安定。
+///
+/// 規則（Python 参照 `sim2sim_mit_go2_mujoco.py --heading-hold` と同式）:
+/// - 参照は操作開始時のヨー。直進中も旋回中も `ref += wz_user·dt` と進める
+///   ので、意図した旋回は妨げない（追従 50 → 100 %）。
+/// - 補正は |wz_user| < 0.05 のときだけ。積分は旋回中と clip に当たった直後は
+///   凍結（anti-windup）。
+/// - |e| > 45° または 停止→移動の操作開始で参照を現在ヨーに張り直す
+///   （±π の折り返しで勾配が逆を向く事故を防ぐ）。
+pub(crate) struct HeadingServo {
+    pub kp: f64,
+    pub ki: f64,
+    pub clip: f64,
+    reference: Option<f64>,
+    integral: f64,
+    last_corr: f64,
+    was_moving: bool,
+    pub last_err: f64,
+    abs_corr_sum: f64,
+    samples: u64,
+}
+
+impl HeadingServo {
+    pub const STRAIGHT_WZ: f64 = 0.05;
+    pub const RESET_ERR_RAD: f64 = std::f64::consts::FRAC_PI_4;
+
+    pub fn new(kp: f64, ki: f64) -> Self {
+        Self {
+            kp,
+            ki,
+            clip: 0.30,
+            reference: None,
+            integral: 0.0,
+            last_corr: 0.0,
+            was_moving: false,
+            last_err: 0.0,
+            abs_corr_sum: 0.0,
+            samples: 0,
+        }
+    }
+
+    /// 1 tick 進めて、サーボ込みの目標指令を返す（レート制限の**手前**に置く）。
+    pub fn apply(&mut self, yaw: f64, user: [f64; 3], dt: f64) -> [f64; 3] {
+        let moving = user[0].abs() >= 0.05 || user[1].abs() >= 0.05;
+        if self.reference.is_none() || (moving && !self.was_moving) {
+            self.reference = Some(yaw);
+            self.integral = 0.0;
+            self.last_corr = 0.0;
+        }
+        self.was_moving = moving;
+        let mut reference = self.reference.unwrap() + user[2] * dt;
+        let mut err = wrap_pi(yaw - reference);
+        if err.abs() > Self::RESET_ERR_RAD {
+            reference = yaw;
+            err = 0.0;
+            self.integral = 0.0;
+        }
+        self.reference = Some(wrap_pi(reference));
+        // 静止中は補正しない: IMU の yaw はジャイロ積分なので静止中も漂い、
+        // それを「打ち消す」と機体がその場でじわじわ回る。移動中の数秒窓での
+        // ドリフトだけを相手にする（要件: ドリフト ≪ 方策のバイアス 0.12 rad/s。
+        // 15 s で |横| ≤ 0.3 m のゲートなら 1.0 m/s で 9°/min 以下）。
+        let straight = moving && user[2].abs() < Self::STRAIGHT_WZ;
+        let unclipped = self.last_corr.abs() < self.clip - 1.0e-9;
+        if straight && unclipped {
+            self.integral += err * dt;
+        }
+        let corr = if straight {
+            (-self.kp * err - self.ki * self.integral).clamp(-self.clip, self.clip)
+        } else {
+            0.0
+        };
+        self.last_corr = corr;
+        self.last_err = err;
+        self.abs_corr_sum += corr.abs();
+        self.samples += 1;
+        [user[0], user[1], user[2] + corr]
+    }
+
+    pub fn mean_abs_corr(&self) -> f64 {
+        if self.samples == 0 {
+            0.0
+        } else {
+            self.abs_corr_sum / self.samples as f64
+        }
+    }
+}
+
 /// 指令のレート制限 — **学習側の指令生成と同じ処方**。
 ///
 /// mit_rl の `RampedHighSpeedVelocityCommand` は全ての指令変化を平面
@@ -505,8 +646,11 @@ pub(crate) fn spawn_keyboard(
          \x20      1..5 = vx を {P1:.1}/{P2:.1}/{P3:.1}/{P4:.1}/{P5:.1} に即設定, \
          0 か Space = 全部 0, Esc / q = 終了（伏せて抜ける）\r\n\
          \x20      指令域: vx ≤ {vx_hi:.2}, |vy| ≤ {vy_hi:.2}, |wz| ≤ {wz_hi:.2}\r",
-        P1 = VX_PRESETS[0], P2 = VX_PRESETS[1], P3 = VX_PRESETS[2],
-        P4 = VX_PRESETS[3], P5 = VX_PRESETS[4],
+        P1 = VX_PRESETS[0],
+        P2 = VX_PRESETS[1],
+        P3 = VX_PRESETS[2],
+        P4 = VX_PRESETS[3],
+        P5 = VX_PRESETS[4],
     );
     Ok(std::thread::spawn(move || {
         loop {
@@ -593,11 +737,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let mut ctl = Ctl::load(&a)?;
     if a.odom_calibrated && !ctl.wants_velocity() {
-        return Err(
-            "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
+        return Err("--odom-calibrated は脚オドメトリを入力に使う契約専用です\
              （76 入力 Pure、または --gru-host-velocity の GRU）"
-                .into(),
-        );
+            .into());
     }
     if a.estimator.is_some() && !matches!(ctl, Ctl::Gru(_)) {
         return Err("--estimator は GRU 契約（2 入力グラフ）専用です".into());
@@ -695,6 +837,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     // 指令は 0 から学習時と同じレートで立ち上げる（--cmd-accel 0 で無効）。
     let mut cmd_applied = [0.0f64; 3];
+    let mut servo = a.heading_hold.map(|(kp, ki)| HeadingServo::new(kp, ki));
+    if let Some(sv) = &servo {
+        eprintln!(
+            "policy: 方位保持 ON（KP {:.2} KI {:.2}、補正 ±{:.2} rad/s、直進指令のみ）\r",
+            sv.kp, sv.ki, sv.clip
+        );
+    }
     if a.cmd_accel > 0.0 || a.cmd_yaw_accel > 0.0 {
         eprintln!(
             "policy: 指令を {:.2} m/s² / {:.2} rad/s² で制限します（学習側と同じ。\
@@ -762,9 +911,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
         // 50 Hz: 推論。失敗は直前の指令を保持。
         if !a.hold && k % DECIMATION == 0 {
+            let servo_target = match servo.as_mut() {
+                Some(sv) => sv.apply(
+                    yaw_from_quat_wxyz(&inp.quat_wxyz),
+                    cmd_target,
+                    CONTROL_DT * DECIMATION as f64,
+                ),
+                None => cmd_target,
+            };
             cmd_applied = rate_limit_cmd(
                 cmd_applied,
-                cmd_target,
+                servo_target,
                 a.cmd_accel,
                 a.cmd_yaw_accel,
                 CONTROL_DT * DECIMATION as f64,
@@ -882,6 +1039,118 @@ pub fn run(args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(test)]
+mod heading_servo_tests {
+    use super::*;
+
+    fn quat_yaw(yaw: f64) -> [f64; 4] {
+        [(yaw / 2.0).cos(), 0.0, 0.0, (yaw / 2.0).sin()]
+    }
+
+    #[test]
+    fn yaw_round_trips_through_the_quaternion() {
+        for yaw in [-3.0, -1.0, 0.0, 0.7, 2.9] {
+            assert!((yaw_from_quat_wxyz(&quat_yaw(yaw)) - yaw).abs() < 1e-12);
+        }
+    }
+
+    /// 親 GRU の MuJoCo バイアス（1.0 m/s で −0.12 rad/s）を DC 外乱として
+    /// 与えた 1 次モデル: 15 s で方位誤差が消え、補正がバイアスに落ち着く。
+    #[test]
+    fn pi_cancels_a_constant_yaw_bias_through_the_rate_limit() {
+        let bias = -0.12;
+        let dt = 0.02;
+        let mut sv = HeadingServo::new(2.0, 0.5);
+        let mut yaw = 0.3;
+        let mut applied = [0.0; 3];
+        for _ in 0..750 {
+            let target = sv.apply(yaw, [1.0, 0.0, 0.0], dt);
+            applied = rate_limit_cmd(applied, target, 0.5, 0.7, dt);
+            yaw += (applied[2] + bias) * dt;
+        }
+        assert!(sv.last_err.abs() < 0.5f64.to_radians(), "err {:.4}", sv.last_err);
+        assert!((applied[2] - (-bias)).abs() < 0.01, "corr {:.4}", applied[2]);
+        assert!(sv.mean_abs_corr() < 0.3);
+    }
+
+    /// 旋回指令中は補正せず、参照だけが指令を積む。旋回後に直進へ戻しても
+    /// 旋回した分を戻そうとはしない。
+    #[test]
+    fn turning_is_never_fought() {
+        let dt = 0.02;
+        let mut sv = HeadingServo::new(2.0, 0.5);
+        let mut yaw = 0.0;
+        for _ in 0..250 {
+            let t = sv.apply(yaw, [0.6, 0.0, 0.3], dt);
+            assert_eq!(t[2], 0.3);
+            yaw += 0.3 * dt;
+        }
+        let t = sv.apply(yaw, [0.6, 0.0, 0.0], dt);
+        assert!(t[2].abs() < 1e-6, "corr after a tracked turn {:.4}", t[2]);
+    }
+
+    /// clip に当たっている間は積分が進まない（anti-windup）。
+    #[test]
+    fn integral_freezes_while_clipped() {
+        let dt = 0.02;
+        let mut sv = HeadingServo::new(4.0, 2.0);
+        // 参照 0、ヨーが 0.5 rad ずれたまま動かない（方策が応答しない状況）。
+        let _ = sv.apply(0.0, [0.5, 0.0, 0.0], dt);
+        for _ in 0..200 {
+            let t = sv.apply(0.5, [0.5, 0.0, 0.0], dt);
+            assert!((t[2] - (-0.30)).abs() < 1e-9);
+        }
+        let frozen = sv.integral;
+        for _ in 0..200 {
+            let _ = sv.apply(0.5, [0.5, 0.0, 0.0], dt);
+        }
+        assert!((sv.integral - frozen).abs() < 1e-12);
+    }
+
+    /// 大きなずれ（>45°）と停止→移動の操作開始は参照を張り直す。
+    #[test]
+    fn reference_resets_on_large_error_and_on_move_start() {
+        let dt = 0.02;
+        let mut sv = HeadingServo::new(2.0, 0.5);
+        let _ = sv.apply(0.0, [0.3, 0.0, 0.0], dt);
+        let t = sv.apply(1.0, [0.3, 0.0, 0.0], dt);
+        assert!(t[2].abs() < 1e-9, "large error must reset, got corr {:.3}", t[2]);
+        // 停止中に誰かが機体を回した → 再び前進を指示した時点のヨーが参照。
+        let _ = sv.apply(1.0, [0.0, 0.0, 0.0], dt);
+        let _ = sv.apply(1.3, [0.0, 0.0, 0.0], dt);
+        let t = sv.apply(1.3, [0.3, 0.0, 0.0], dt);
+        assert!(t[2].abs() < 1e-9, "move start must reset, got corr {:.3}", t[2]);
+    }
+
+    /// 静止中は yaw が漂っても補正しない（実機 IMU の yaw はジャイロ積分）。
+    #[test]
+    fn standing_never_corrects_even_if_yaw_drifts() {
+        let dt = 0.02;
+        let mut sv = HeadingServo::new(2.0, 0.5);
+        let mut yaw = 0.0;
+        for _ in 0..500 {
+            yaw += 0.01 * dt; // 0.57 °/s の見かけのドリフト
+            let t = sv.apply(yaw, [0.0, 0.0, 0.0], dt);
+            assert_eq!(t[2], 0.0);
+        }
+        assert_eq!(sv.mean_abs_corr(), 0.0);
+    }
+
+    #[test]
+    fn heading_hold_flag_parses_and_validates() {
+        let ok: Vec<String> = ["--model", "p.onnx", "--heading-hold", "2.0", "0.5"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse(&ok).unwrap().heading_hold, Some((2.0, 0.5)));
+        let bad: Vec<String> = ["--model", "p.onnx", "--heading-hold", "0", "0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse(&bad).is_err());
+    }
+}
+
+#[cfg(test)]
 mod stance_tests {
     use super::*;
 
@@ -920,8 +1189,22 @@ mod stance_tests {
     #[test]
     fn explicit_yaw_gain_wins_whatever_the_order() {
         for args in [
-            vec!["--model", "p.onnx", "--body-height", "0.24", "--yaw-stride-gain", "2.0"],
-            vec!["--model", "p.onnx", "--yaw-stride-gain", "2.0", "--body-height", "0.24"],
+            vec![
+                "--model",
+                "p.onnx",
+                "--body-height",
+                "0.24",
+                "--yaw-stride-gain",
+                "2.0",
+            ],
+            vec![
+                "--model",
+                "p.onnx",
+                "--yaw-stride-gain",
+                "2.0",
+                "--body-height",
+                "0.24",
+            ],
         ] {
             let a = parse_ok(&args);
             assert_eq!(a.cfg.body_height, Some(0.24), "{args:?}");
@@ -934,11 +1217,15 @@ mod stance_tests {
     #[test]
     fn out_of_range_height_is_clamped() {
         assert_eq!(
-            parse_ok(&["--model", "p.onnx", "--body-height", "0.15"]).cfg.body_height,
+            parse_ok(&["--model", "p.onnx", "--body-height", "0.15"])
+                .cfg
+                .body_height,
             Some(0.21)
         );
         assert_eq!(
-            parse_ok(&["--model", "p.onnx", "--body-height", "0.40"]).cfg.body_height,
+            parse_ok(&["--model", "p.onnx", "--body-height", "0.40"])
+                .cfg
+                .body_height,
             Some(0.31)
         );
     }

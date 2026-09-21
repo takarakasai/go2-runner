@@ -31,7 +31,10 @@ use misa_runner::viz;
 
 use crate::estimator::LegOdometry;
 use crate::go2_plant::{go2_axes, MISA_TO_GO2};
-use crate::policy::{cmd_clamp, rate_limit_cmd, spawn_keyboard, world_to_body, Args, Ctl};
+use crate::policy::{
+    cmd_clamp, rate_limit_cmd, spawn_keyboard, world_to_body, yaw_from_quat_wxyz, Args, Ctl,
+    HeadingServo,
+};
 
 const CONTROL_DT: f64 = 0.002;
 const DECIMATION: u64 = 10;
@@ -389,6 +392,13 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     }
     // 学習側と同じレートで指令を立ち上げる（--cmd-accel 0 で無効）。
     let mut cmd_applied = [0.0f64; 3];
+    let mut servo = a.heading_hold.map(|(kp, ki)| HeadingServo::new(kp, ki));
+    if let Some(sv) = &servo {
+        eprintln!(
+            "policy-sim: 方位保持 ON（KP {:.2} KI {:.2}、補正 ±{:.2} rad/s、直進指令のみ）",
+            sv.kp, sv.ki, sv.clip
+        );
+    }
     let mut held: PolicyTick = ctl.hold();
     let mut faults: u32 = 0;
     let mut fell: Option<String> = None;
@@ -492,9 +502,17 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 odom.vel_world()
             };
             let vel_body = world_to_body(&inp.quat_wxyz, vel_world);
+            let servo_target = match servo.as_mut() {
+                Some(sv) => sv.apply(
+                    yaw_from_quat_wxyz(&inp.quat_wxyz),
+                    cmd_target,
+                    CONTROL_DT * DECIMATION as f64,
+                ),
+                None => cmd_target,
+            };
             cmd_applied = rate_limit_cmd(
                 cmd_applied,
-                cmd_target,
+                servo_target,
                 a.cmd_accel,
                 a.cmd_yaw_accel,
                 CONTROL_DT * DECIMATION as f64,
@@ -676,6 +694,15 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         },
         if vx_n > 0 { vx_sum / vx_n as f64 } else { 0.0 },
     );
+    if let Some(sv) = &servo {
+        eprintln!(
+            "policy-sim: 方位保持 KP {:.2} KI {:.2} / 平均|補正| {:.3} rad/s / 終端方位誤差 {:+.2}°",
+            sv.kp,
+            sv.ki,
+            sv.mean_abs_corr(),
+            sv.last_err.to_degrees()
+        );
+    }
     if vx_n > 0 {
         eprintln!(
             "policy-sim: v̄y(t≥2s, 体系) 真値 {:+.3} / オドメトリ {:+.3} m/s / ω̄z {:+.3} rad/s",

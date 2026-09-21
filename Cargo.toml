@@ -69,4 +69,9 @@ sim = ["misa-runner/sim", "dep:misa-plant-mujoco"]
 sim-autodownload = ["sim", "dep:mujoco-rs", "mujoco-rs/auto-download-mujoco"]
 render = ["misa-runner/render"]
 
+# Local diagnostic GRU controller prototype. Keep this patch until the
+# corresponding misa-policy-runner change is published and Cargo.lock updated.
+[patch."https://github.com/takarakasai/misa-policy-runner.git"]
+misa-policy-runner = { path = "../misa-policy-runner" }
+
 [workspace]
