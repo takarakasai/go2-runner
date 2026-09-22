@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! go2-run policy --model exported/policy.onnx [--estimator estimator.onnx]
+//!                [--estimator-bias 0.069]
 //!                [--iface eth0]
 //!                [--vx V] [--vy V] [--wz W] [--duration S]
 //!                [--stride-gain 1.55] [--yaw-stride-gain 2.0]
@@ -117,6 +118,12 @@ pub(crate) struct Args {
     pub gru_symmetric_calf_weight: f64,
     /// Diagnostic low-speed vx scaling fed to the GRU and estimator; tapers to 1 at 0.6 m/s.
     pub gru_vx_gain: f64,
+    /// 凍結推定器の vx の測定オフセット [m/s]。指令があるときだけ推定値から引く。
+    /// 推定器は学習時と違うプラントで前進速度を過大に返し、**静止していても**
+    /// +0.062〜0.076 m/s を報告する（MuJoCo 3 プラント実測）ので、乗算では消せない。
+    /// 0.069 を引くと 0.3 m/s の追従が 86 → 91 %、0.2 m/s が 69 → 76 %、傾きは不変。
+    /// go2_rl/doc/gru_estimator_bias_correction.md。**実機では静止させて実測すること。**
+    pub estimator_vx_bias: f64,
     /// 世界系ヨーの PI 方位保持 `(KP, KI)`。直進指令（|wz| < 0.05）の間、IMU の
     /// ヨーを「操作開始時のヨー + ∫指令 wz」に保つ補正を wz 指令へ足す。方策は
     /// 変えない。go2_rl/doc/gru_straightness_heading_servo_20260921.md: 親 GRU の
@@ -149,6 +156,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         gru_host_velocity: false,
         gru_symmetric_calf_weight: 0.0,
         gru_vx_gain: 1.0,
+        estimator_vx_bias: 0.0,
         cmd_accel: 0.5,
         cmd_yaw_accel: 0.7,
         heading_hold: None,
@@ -214,6 +222,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 out.gru_symmetric_calf_weight = val(&mut it, "--gru-symmetric-calf-weight")?
             }
             "--gru-vx-gain" => out.gru_vx_gain = val(&mut it, "--gru-vx-gain")?,
+            "--estimator-bias" => out.estimator_vx_bias = val(&mut it, "--estimator-bias")?,
             "--cmd-accel" => out.cmd_accel = val(&mut it, "--cmd-accel")?,
             "--cmd-yaw-accel" => out.cmd_yaw_accel = val(&mut it, "--cmd-yaw-accel")?,
             "--heading-hold" => {
@@ -281,6 +290,11 @@ impl Ctl {
             };
             let mut ctl = PureGruController::new(policy, velocity)?;
             ctl.configure_symmetric_calf(a.gru_symmetric_calf_weight, a.gru_vx_gain)?;
+            ctl.set_estimator_vx_bias(a.estimator_vx_bias)?;
+            if a.estimator_vx_bias != 0.0 {
+                eprintln!("policy: estimator vx bias {:.3} m/s subtracted while a motion is commanded",
+                          a.estimator_vx_bias);
+            }
             if a.gru_symmetric_calf_weight > 0.0 || a.gru_vx_gain != 1.0 {
                 eprintln!("policy: diagnostic mirrored GRU calf blend weight {:.3}, vx input gain {:.3}; separate mirrored hidden state", a.gru_symmetric_calf_weight, a.gru_vx_gain);
             }
@@ -1210,6 +1224,16 @@ mod stance_tests {
             assert_eq!(a.cfg.body_height, Some(0.24), "{args:?}");
             assert_eq!(a.cfg.yaw_stride_gain, Some(2.0), "{args:?}");
         }
+    }
+
+    /// The estimator bias defaults to off and is passed through verbatim.
+    #[test]
+    fn estimator_bias_defaults_off_and_parses() {
+        assert_eq!(parse_ok(&["--model", "p.onnx"]).estimator_vx_bias, 0.0);
+        assert_eq!(
+            parse_ok(&["--model", "p.onnx", "--estimator-bias", "0.069"]).estimator_vx_bias,
+            0.069
+        );
     }
 
     /// Heights outside the measured range are clamped, never extrapolated:
