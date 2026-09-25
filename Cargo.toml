@@ -70,8 +70,3 @@ sim-autodownload = ["sim", "dep:mujoco-rs", "mujoco-rs/auto-download-mujoco"]
 render = ["misa-runner/render"]
 
 [workspace]
-
-# 盲目段差契約（blind.rs）の開発中はローカルのチェックアウトを見る。
-# **公開前に外すこと**（外さないと他の PC でビルドできない）。
-[patch.'https://github.com/takarakasai/misa-policy-runner.git']
-misa-policy-runner = { path = "../misa-policy-runner" }
