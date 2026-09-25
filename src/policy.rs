@@ -42,6 +42,7 @@ use misa_policy_runner::go2::{
     clamp_cmd, dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC, ISAAC_TO_GO2,
 };
 use misa_policy_runner::gru::{HistoryVelocityEstimator, VelocitySource};
+use misa_policy_runner::blind::{clamp_blind_cmd, BlindController};
 use misa_policy_runner::{
     clamp_gru_cmd, clamp_pure_cmd, graph_input_arity, BaseState, NaturalController, ObsInput,
     OnnxPolicy, PolicyTick, PureController, PureGruController, RecurrentOnnxPolicy, TrajectoryCfg,
@@ -262,6 +263,9 @@ pub(crate) enum Ctl {
     Natural(NaturalController),
     Pure(PureController),
     Gru(PureGruController),
+    /// 盲目（内界センサのみ）の段差契約: 観測 48·H、行動 12、ゲイン固定。
+    /// go2_rl `artifacts/GO2_BLIND_STAIRS20.md`。
+    Blind(BlindController),
 }
 
 impl Ctl {
@@ -303,6 +307,15 @@ impl Ctl {
         if a.gru_symmetric_calf_weight != 0.0 || a.gru_vx_gain != 1.0 {
             return Err("GRU diagnostic blend/gain flags require a 2-input GRU graph".into());
         }
+        // 盲目契約は入力が 48 の倍数（履歴 H フレーム）。39/73/76 と重ならない
+        // 幅なので、先に試して幅で見分ける。
+        let mut blind_errs = Vec::new();
+        for h in 1usize..=10 {
+            match OnnxPolicy::load(&a.model, 48 * h) {
+                Ok(p) => return BlindController::new(p).map(Ctl::Blind),
+                Err(e) => blind_errs.push(format!("{}: {e}", 48 * h)),
+            }
+        }
         let mut errs = Vec::new();
         for n in [39usize, 73, 76] {
             match OnnxPolicy::load(&a.model, n) {
@@ -317,8 +330,10 @@ impl Ctl {
             }
         }
         Err(format!(
-            "--model は 39/73/76 入力のいずれとしても読めません — {}",
-            errs.join(" / ")
+            "--model は 39/73/76 入力としても、盲目契約（48 の倍数）としても\
+             読めません — {} / 盲目: {}",
+            errs.join(" / "),
+            blind_errs.join(" / ")
         ))
     }
 
@@ -329,6 +344,8 @@ impl Ctl {
             Ctl::Pure(_) => "Pure (73 入力)",
             Ctl::Gru(c) if c.wants_host_velocity() => "GRU (76 入力 + 隠れ状態 128, 脚オドメトリ)",
             Ctl::Gru(_) => "GRU (76 入力 + 隠れ状態 128, 凍結推定器)",
+            Ctl::Blind(c) if c.history_len() > 1 => "盲目段差 (48×履歴 入力, 行動 12, ゲイン固定)",
+            Ctl::Blind(_) => "盲目段差 (48 入力, 行動 12, ゲイン固定)",
         }
     }
 
@@ -338,6 +355,7 @@ impl Ctl {
             Ctl::Natural(_) => clamp_cmd,
             Ctl::Pure(_) => clamp_pure_cmd,
             Ctl::Gru(_) => clamp_gru_cmd,
+            Ctl::Blind(_) => clamp_blind_cmd,
         }
     }
 
@@ -347,7 +365,7 @@ impl Ctl {
     pub(crate) fn velocity_fed(&self) -> Option<[f64; 3]> {
         match self {
             Ctl::Gru(c) => Some(c.velocity_used()),
-            Ctl::Natural(_) | Ctl::Pure(_) => None,
+            Ctl::Natural(_) | Ctl::Pure(_) | Ctl::Blind(_) => None,
         }
     }
 
@@ -362,6 +380,7 @@ impl Ctl {
         match self {
             Ctl::Pure(c) => c.wants_velocity(),
             Ctl::Gru(c) => c.wants_host_velocity(),
+            Ctl::Blind(c) => c.wants_velocity(),
             Ctl::Natural(_) => false,
         }
     }
@@ -397,6 +416,7 @@ impl Ctl {
             Ctl::Natural(c) => c.default_pose_isaac(),
             Ctl::Pure(c) => c.default_pose_isaac(),
             Ctl::Gru(c) => c.default_pose_isaac(),
+            Ctl::Blind(c) => c.default_pose_isaac(),
         }
     }
 
@@ -405,6 +425,7 @@ impl Ctl {
             Ctl::Natural(c) => c.initial_gains(),
             Ctl::Pure(c) => c.initial_gains(),
             Ctl::Gru(c) => c.initial_gains(),
+            Ctl::Blind(c) => c.initial_gains(),
         }
     }
 
@@ -413,6 +434,7 @@ impl Ctl {
             Ctl::Natural(c) => c.reset(),
             Ctl::Pure(c) => c.reset(),
             Ctl::Gru(c) => c.reset(),
+            Ctl::Blind(c) => c.reset(),
         }
     }
 
@@ -421,6 +443,7 @@ impl Ctl {
             Ctl::Natural(c) => c.gait_time_s(),
             Ctl::Pure(c) => c.gait_time_s(),
             Ctl::Gru(c) => c.gait_time_s(),
+            Ctl::Blind(c) => c.gait_time_s(),
         }
     }
 
@@ -429,6 +452,7 @@ impl Ctl {
             Ctl::Natural(c) => c.hold(),
             Ctl::Pure(c) => c.hold(),
             Ctl::Gru(c) => c.hold(),
+            Ctl::Blind(c) => c.hold(),
         }
     }
 
@@ -437,7 +461,7 @@ impl Ctl {
     pub(crate) fn swing(&self) -> Option<[bool; 4]> {
         match self {
             Ctl::Natural(c) => Some(c.swing()),
-            Ctl::Pure(_) | Ctl::Gru(_) => None,
+            Ctl::Pure(_) | Ctl::Gru(_) | Ctl::Blind(_) => None,
         }
     }
 
@@ -453,6 +477,7 @@ impl Ctl {
             Ctl::Natural(c) => c.tick(inp, cmd),
             Ctl::Pure(c) => c.tick(inp, cmd, vel_body),
             Ctl::Gru(c) => c.tick(inp, cmd, vel_body),
+            Ctl::Blind(c) => c.tick(inp, cmd, vel_body),
         }
     }
 
@@ -465,7 +490,7 @@ impl Ctl {
     ) -> [f64; 12] {
         match self {
             Ctl::Natural(c) => c.support_torque(base, cmd, q_isaac),
-            Ctl::Pure(_) | Ctl::Gru(_) => [0.0; 12],
+            Ctl::Pure(_) | Ctl::Gru(_) | Ctl::Blind(_) => [0.0; 12],
         }
     }
 }
