@@ -40,8 +40,18 @@ pub struct LegOdometry {
 
 impl LegOdometry {
     pub fn new() -> Self {
+        // **学習側の観測にローパスは無い**（mit_rl の
+        // `contact_leg_odometry_lin_vel_b` は瞬時値）。ここだけ 10 Hz で均して
+        // いるので、接地が疎で飛び飛びになる階段では遅れが効く可能性がある。
+        // 切り分け用に `GO2_ODOM_LPF_HZ` で変えられるようにする
+        // （大きい値 = 実質オフ）。既定は従来どおり 10 Hz。
+        let lpf_alpha_hz = std::env::var("GO2_ODOM_LPF_HZ")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(10.0);
         Self {
-            lpf_alpha_hz: 10.0,
+            lpf_alpha_hz,
             vel_world: [0.0; 3],
             vel_valid: false,
             height_m: 0.30,

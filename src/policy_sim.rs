@@ -111,6 +111,42 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
 /// `priority = 1` を持つ。MuJoCo では per-geom 値が `<default>` を上書きし、
 /// priority 付きの geom が接触ペアの摩擦を単独で決めるので、`<default>` 経由の
 /// 指定は**足には一切届かない**（指令 0.3 m/s の 8 s 走行で μ 0.1 と μ 0.8 の
+
+/// 足ごとの接地を**接触力の大きさ**で決める。
+///
+/// **なぜプラントの `Observation::contacts` を使わないか**:
+/// misa-plant-mujoco はプラントの `contact_force_per_foot`（articara）を
+/// 使っており、あれは接触力の**世界系 z 成分だけ**を足す
+/// （`out[slot] += c.force_world[2]`）。法線が +z の平地なら一致するが、
+/// **階段は蹴上げや段鼻で法線が傾き、符号違いの成分が相殺して接地を
+/// 取りこぼす**。学習側（mit_rl の `contact_leg_odometry_lin_vel_b`）と
+/// Python 参照ハーネスはどちらも**力の大きさ**で判定しているので、そちらに揃える。
+///
+/// 実測（2026-09-27、20 cm × 10 段）: 世界系 z だと脚オドメトリの偏りが
+/// **−0.72 m/s** になり方策が分布外へ出て 5 段で崩れる。大きさにすると
+/// 偏り **+0.01 m/s** で 10 段登り切る。
+fn stance_from_contacts<I>(contacts: I, threshold_n: f64) -> [bool; 4]
+where
+    I: IntoIterator<Item = (String, String, f64)>,
+{
+    const FEET: [&str; 4] = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"];
+    let mut f = [0.0f64; 4];
+    for (body1, body2, force) in contacts {
+        // 世界側は名前が空。両方とも非空なら自己干渉なので飛ばす。
+        let name: &str = match (body1.is_empty(), body2.is_empty()) {
+            (true, false) => body2.as_str(),
+            (false, true) => body1.as_str(),
+            _ => continue,
+        };
+        if let Some(slot) = FEET.iter().position(|l| *l == name) {
+            f[slot] += force;
+        }
+    }
+    core::array::from_fn(|l| f[l] > threshold_n)
+}
+
+/// 接地とみなす接触力 [N]。学習側・Python 参照ハーネスと同じ 5 N。
+const CONTACT_THRESHOLD_N: f64 = 5.0;
 /// 軌跡がビット単位で一致する、という形で出る）。torsional / rolling 成分は
 /// .misa の値のまま残す（Python 参照プラントの `0.02 / 0.01` と同じ）。
 fn rewrite_misa(
@@ -412,6 +448,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
 
     ctl.reset();
     let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
+    let (mut stance_n_sum, mut contact_none_sum, mut stance_ticks) = (0u64, 0u64, 0u64);
+    let mut fk_checked = false;
+    // 脚オドメトリの診断（FK 照合・恒等式の突き合わせ）。既定は静か。
+    let trace_odom = std::env::var_os("GO2_TRACE_ODOM").is_some();
+    // 既定で有効。`GO2_STANCE_FZ=1` で従来（世界系 z 成分）に戻せる。
+    let stance_by_magnitude = std::env::var("GO2_STANCE_FZ").ok().as_deref() != Some("1");
+    let mut stance_dbg = [true; 4];
+    let (mut slip_sum, mut slip_x_sum, mut slip_n) = (0.0f64, 0.0f64, 0u64);
     if a.odom_calibrated {
         eprintln!("policy-sim: 接地脚の速度依存滑り補正を有効化しました");
     }
@@ -505,10 +549,116 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // Natural は計画 swing、Pure は計画が無いので接地センサを使う。
         let stance = match ctl.swing() {
             Some(sw) => [!sw[0], !sw[1], !sw[2], !sw[3]],
+            None if stance_by_magnitude => {
+                let pairs = plant.sim().contacts().into_iter().map(|c| {
+                    (c.body1, c.body2, {
+                        let f = c.force_world;
+                        (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt()
+                    })
+                });
+                stance_from_contacts(pairs, CONTACT_THRESHOLD_N)
+            }
             None => {
                 core::array::from_fn(|l| obs.contacts.get(l).copied().flatten().unwrap_or(true))
             }
         };
+        // **解析 FK をプラントの実物と突き合わせる（1 度だけ）。**
+        // 脚オドメトリは −R(ω×p + J q̇) で、`p` は解析 FK が返す胴体系の足位置。
+        // `p` がずれていると `ω × p` の項がずれ、**姿勢が寝ない平地では小さく、
+        // 角速度が大きい階段で爆発する**（2026-09-27 の症状と合う）。
+        if trace_odom && !fk_checked {
+            fk_checked = true;
+            let mut q_isaac = [0.0f64; 12];
+            for g in 0..12 {
+                q_isaac[misa_policy_runner::go2::GO2_TO_ISAAC[g]] = inp.joint_q_go2[g];
+            }
+            let feet_fk = misa_policy_runner::natural::fk(&q_isaac);
+            let base_w = plant.sim().body_world_position("base").unwrap_or([0.0; 3]);
+            for (l, name) in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"].iter().enumerate() {
+                if let Some(pw) = plant.sim().body_world_position(name) {
+                    let rel_w = [pw[0] - base_w[0], pw[1] - base_w[1], pw[2] - base_w[2]];
+                    let rel_b = misa_policy_runner::support::quat_rotate_inverse(&inp.quat_wxyz, rel_w);
+                    let d = [
+                        feet_fk[l][0] - rel_b[0],
+                        feet_fk[l][1] - rel_b[1],
+                        feet_fk[l][2] - rel_b[2],
+                    ];
+                    eprintln!(
+                        "policy-sim: FK照合 {name}: 解析=({:+.4},{:+.4},{:+.4}) 実物=({:+.4},{:+.4},{:+.4}) 差=({:+.4},{:+.4},{:+.4}) |差|={:.4} m",
+                        feet_fk[l][0], feet_fk[l][1], feet_fk[l][2],
+                        rel_b[0], rel_b[1], rel_b[2],
+                        d[0], d[1], d[2],
+                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                    );
+                }
+            }
+        }
+        // **恒等式の両辺を突き合わせる（歩行中に数点）。**
+        // 脚オドメトリの候補は −R(ω×p + J q̇)。剛体関係から
+        // これは v_base_w − v_foot_w に等しい。等しくなければ運動学（J）の
+        // 実装が違い、等しいのに推定が外れるなら**接地足が実際に動いている**
+        // （滑り・段鼻でのピボット）＝プラントの物理の差になる。
+        if trace_odom && k % 500 == 0 && (1000..=7000).contains(&k) {
+            let mut q_isaac = [0.0f64; 12];
+            let mut dq_isaac = [0.0f64; 12];
+            for g in 0..12 {
+                q_isaac[misa_policy_runner::go2::GO2_TO_ISAAC[g]] = inp.joint_q_go2[g];
+                dq_isaac[misa_policy_runner::go2::GO2_TO_ISAAC[g]] = inp.joint_dq_go2[g];
+            }
+            let feet_fk = misa_policy_runner::natural::fk(&q_isaac);
+            let vb = plant.sim().body_world_linear_velocity("base").unwrap_or([0.0; 3]);
+            for (l, name) in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"].iter().enumerate() {
+                if !stance_dbg[l] {
+                    continue;
+                }
+                let vf = plant.sim().body_world_linear_velocity(name).unwrap_or([0.0; 3]);
+                let j = misa_policy_runner::natural::leg_jacobian(&q_isaac, l);
+                let dql = [dq_isaac[l], dq_isaac[4 + l], dq_isaac[8 + l]];
+                let jqd = [
+                    j[0][0] * dql[0] + j[0][1] * dql[1] + j[0][2] * dql[2],
+                    j[1][0] * dql[0] + j[1][1] * dql[1] + j[1][2] * dql[2],
+                    j[2][0] * dql[0] + j[2][1] * dql[1] + j[2][2] * dql[2],
+                ];
+                let p = feet_fk[l];
+                let g = inp.gyro_rad_s;
+                let wxp = [
+                    g[1] * p[2] - g[2] * p[1],
+                    g[2] * p[0] - g[0] * p[2],
+                    g[0] * p[1] - g[1] * p[0],
+                ];
+                // 左辺: 解析の足速度（胴体系）
+                let lhs = [jqd[0] + wxp[0], jqd[1] + wxp[1], jqd[2] + wxp[2]];
+                // 右辺: 実物の足速度 − 胴体速度（世界系）を胴体系へ
+                let rel_w = [vf[0] - vb[0], vf[1] - vb[1], vf[2] - vb[2]];
+                let rhs = misa_policy_runner::support::quat_rotate_inverse(&inp.quat_wxyz, rel_w);
+                eprintln!(
+                    "policy-sim: 恒等式 t={:.2} {name}: 解析(ω×p+Jq̇)=({:+.3},{:+.3},{:+.3}) 実物=({:+.3},{:+.3},{:+.3}) | 接地足の世界速度 |v_foot|={:.3} m/s",
+                    k as f64 * CONTROL_DT,
+                    lhs[0], lhs[1], lhs[2], rhs[0], rhs[1], rhs[2],
+                    (vf[0] * vf[0] + vf[1] * vf[1] + vf[2] * vf[2]).sqrt()
+                );
+            }
+        }
+        // **接地判定の質を数える。** 盲目契約は計画 swing を持たないので
+        // プラントの接触センサに頼るが、取れない足は `unwrap_or(true)` で
+        // 接地扱いになる。遊脚を接地と数えると脚オドメトリの符号が反転しうる
+        // （2026-09-27: 階段で推定 −0.297 対 真値 +0.419）。
+        stance_dbg = stance;
+        // **接地と判定された足が世界系でどれだけ動いているか。**
+        // 脚オドメトリは「接地足は止まっている」を前提に v_base を出すので、
+        // ここが大きいぶんがそのまま推定の偏りになる。
+        for (l, name) in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"].iter().enumerate() {
+            if stance[l] {
+                if let Some(vf) = plant.sim().body_world_linear_velocity(name) {
+                    slip_sum += (vf[0] * vf[0] + vf[1] * vf[1] + vf[2] * vf[2]).sqrt();
+                    slip_x_sum += vf[0];
+                    slip_n += 1;
+                }
+            }
+        }
+        stance_n_sum += stance.iter().filter(|s| **s).count() as u64;
+        contact_none_sum += obs.contacts.iter().take(4).filter(|c| c.is_none()).count() as u64;
+        stance_ticks += 1;
         odom.update(
             &inp.quat_wxyz,
             inp.gyro_rad_s,
@@ -771,6 +921,21 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         z_max,
     );
     if vx_n > 0 {
+    if stance_ticks > 0 {
+        eprintln!(
+                "policy-sim: 接地判定 平均 {:.2} 本/周期（4 本中）、接触センサが取れなかった足 {:.1} %",
+            stance_n_sum as f64 / stance_ticks as f64,
+            100.0 * contact_none_sum as f64 / (4.0 * stance_ticks as f64)
+        );
+    }
+    if slip_n > 0 {
+        eprintln!(
+            "policy-sim: 接地足の滑り |v_foot| 平均 {:.3} m/s（前後成分の平均 {:+.3}、n={}）",
+            slip_sum / slip_n as f64,
+            slip_x_sum / slip_n as f64,
+            slip_n
+        );
+    }
         for (leg, name) in ["FL", "FR", "RL", "RR"].iter().enumerate() {
             let n = candidate_n[leg];
             if n > 0 {
@@ -853,5 +1018,46 @@ priority = 1
         let (out, joints, contacts, _) = rewrite_misa(text, 0.1, Some(0.4), None);
         assert_eq!((joints, contacts), (1, 1));
         assert_eq!(out, "damping = 0.1\nfriction = [0.4, 0.02, 0.01]\n");
+    }
+}
+
+#[cfg(test)]
+mod stance_tests {
+    use super::{stance_from_contacts, CONTACT_THRESHOLD_N};
+
+    fn c(body: &str, force: f64) -> (String, String, f64) {
+        // 世界側は空名（articara の ContactInfo の約束）。
+        (String::new(), body.to_string(), force)
+    }
+
+    #[test]
+    fn counts_a_foot_once_its_force_passes_the_threshold() {
+        let s = stance_from_contacts(vec![c("FL_foot", 40.0), c("RR_foot", 3.0)], CONTACT_THRESHOLD_N);
+        assert_eq!(s, [true, false, false, false]);
+    }
+
+    /// **同じ足の複数接点は足し合わせる。** 段鼻では 1 本の足が 2 点で
+    /// 当たり、1 点ずつでは閾値に届かないことがある。
+    #[test]
+    fn sums_multiple_contact_points_on_the_same_foot() {
+        let s = stance_from_contacts(vec![c("FR_foot", 3.0), c("FR_foot", 3.0)], CONTACT_THRESHOLD_N);
+        assert_eq!(s, [false, true, false, false]);
+    }
+
+    /// 自己干渉（両側とも機体）は接地ではない。
+    #[test]
+    fn ignores_self_collisions() {
+        let s = stance_from_contacts(
+            vec![("FL_calf".to_string(), "FL_foot".to_string(), 99.0)],
+            CONTACT_THRESHOLD_N,
+        );
+        assert_eq!(s, [false; 4]);
+    }
+
+    /// 足でない部位が地面に当たっても接地には数えない。
+    #[test]
+    fn ignores_non_foot_ground_contacts() {
+        let s = stance_from_contacts(vec![c("base", 200.0), c("RL_thigh", 50.0)], CONTACT_THRESHOLD_N);
+        assert_eq!(s, [false; 4]);
     }
 }
