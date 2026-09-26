@@ -33,6 +33,7 @@
 //! 安全側: 観測スクリーンの異常・推論失敗は直前の指令を保持（連発で中断）、
 //! 傾き 35° で即脱力（立て直しより転倒完了のほうが安全）。
 
+use crate::stairs::StairsSpec;
 use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -96,6 +97,12 @@ pub(crate) struct Args {
     pub impratio: Option<f64>,
     /// --sim: MuJoCo の `<option cone>`（既定 elliptic、同上）。
     pub cone: Option<String>,
+    /// --sim: 階段を置く `蹴上げ[m],段数,踏面[m],幅[m],開始x[m]`。
+    ///
+    /// **なぜ要るか**: これが無いと Rust ランタイムを平地でしか閉ループで
+    /// 回せず、段差の方策（go2_rl の盲目 MIT）は Python ハーネスでしか
+    /// 検証できない。クロスエンジン照合が平地止まりになる。
+    pub stairs: Option<StairsSpec>,
     /// --sim: 関節の受動粘性（N·m·s/rad）を .misa の値から差し替える。
     /// go2.misa は MuJoCo Menagerie 由来の 2.0 で、数値安定性向けの
     /// 保守的な値。実機はこれよりずっと小さい（詳細は README）。
@@ -151,6 +158,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         vx_max: None,
         impratio: None,
         cone: None,
+        stairs: None,
         joint_damping: None,
         odom_calibrated: false,
         estimator: None,
@@ -212,6 +220,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
+            "--stairs" => {
+                let v = it.next().ok_or("--stairs に値がありません")?;
+                out.stairs = Some(StairsSpec::parse(v)?);
+            }
             "--vx-max" => out.vx_max = Some(val(&mut it, "--vx-max")?),
             "--joint-damping" => out.joint_damping = Some(val(&mut it, "--joint-damping")?),
             "--odom-calibrated" => out.odom_calibrated = true,

@@ -319,6 +319,18 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             .collect(),
         root_link: "base".into(),
     };
+    // 階段は**まだ場に置けない**。misa-plant-mujoco に
+    // `SimOptions::extra_worldbody_xml` を足す変更はローカルにあるが、
+    // go2-runner はこの crate を git から引いており、pin を進めると
+    // misa-runner の無関係な 10 コミット超（knee flip / WBC）まで入る。
+    // pin を揃えたらここを
+    //     extra_worldbody_xml: a.stairs.as_ref().map(|s| s.to_mjcf()),
+    // にして SimOptions へ渡す。**黙って平地で回さない**ために、
+    // 指定されたら止める。
+    if a.stairs.is_some() {
+        return Err("--stairs は misa-plant-mujoco の extra_worldbody_xml                     待ちでまだ効きません（平地で回して段差の数字だと誤解するのを防ぐため止めています）。                    詳細は src/stairs.rs の冒頭"
+            .into());
+    }
     let mut plant = MujocoPlant::new(axes, &opts)?;
     let mut obs = Observation::empty(12, 4);
     let mut cmd_out = Command::idle(12);
