@@ -12,8 +12,29 @@
 //! 階段を置いたら**接地摩擦も合わせること**。go2_rl の MuJoCo ハーネスは
 //! `--foot-friction 0.8` で測っており、既定のままだと段鼻で滑って比較に
 //! ならない。
+//!
+//! # 既知の食い違い（2026-09-26、未解決）
+//!
+//! **平地は一致するが、階段は一致しない。** 同じ ONNX（go2_rl の P/model_15349）で:
+//!
+//! | | Python 参照（go2.xml） | Rust（go2.misa） |
+//! |---|---|---|
+//! | 平地 0.6 m/s | 立位 0.356 m・直進 | 立位 0.360 m・直進（`--heading-hold 2 0.5` 併用時） |
+//! | 20 cm × 10 段 | **10/10 段** | **3〜4 段で転倒** |
+//!
+//! 原因は**衝突形状**とみられる。`go2.xml`（MuJoCo Menagerie）は胴体 1 箱 +
+//! 脚の円柱・球というプリミティブ 8 個ほどなのに対し、`go2.misa` は
+//! **視覚メッシュ 265 個をそのまま衝突形状に使っている**。平地は足裏しか
+//! 当たらないので差が出ないが、**階段では蹴上げに脛・腿が当たる**（go2_rl
+//! doc §8-§10: 登坂の律速は着地点で、当たる部位は常に後脚）ので、
+//! メッシュの角が段鼻に引っかかる。
+//!
+//! 接触パラメータ（friction / condim / priority）と段の寸法は Python 側と
+//! 一致させてあり、方位流れも `--heading-hold` で消したうえでまだ転ぶので、
+//! **配線ではなくプラントの差**。直すには go2.misa の衝突形状を
+//! プリミティブに置き換える必要がある（未着手）。
 
-/// `--stairs` の指定。`蹴上げ,段数,踏面,幅,開始x` の順、後ろは省略可。
+/// `--stairs` の指定。`蹴上げ,段数,踏面,幅,開始x,摩擦` の順、後ろは省略可。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StairsSpec {
     /// 1 段の高さ [m]。
@@ -26,11 +47,13 @@ pub struct StairsSpec {
     pub width_m: f64,
     /// 1 段目の立ち上がりの x [m]。手前に助走距離を取る。
     pub start_x_m: f64,
+    /// 段の接触摩擦の滑り成分。go2_rl のハーネスの既定と同じ 0.8。
+    pub friction: f64,
 }
 
 impl Default for StairsSpec {
     fn default() -> Self {
-        Self { rise_m: 0.20, steps: 10, run_m: 0.30, width_m: 3.0, start_x_m: 1.2 }
+        Self { rise_m: 0.20, steps: 10, run_m: 0.30, width_m: 3.0, start_x_m: 1.2, friction: 0.8 }
     }
 }
 
@@ -56,6 +79,7 @@ impl StairsSpec {
         if let Some(t) = f.get(2) { out.run_m = num(t, "踏面")?; }
         if let Some(t) = f.get(3) { out.width_m = num(t, "幅")?; }
         if let Some(t) = f.get(4) { out.start_x_m = num(t, "開始x")?; }
+        if let Some(t) = f.get(5) { out.friction = num(t, "摩擦")?; }
         if out.rise_m <= 0.0 { return Err("--stairs の蹴上げは正の値".into()); }
         if out.steps == 0 { return Err("--stairs の段数は 1 以上".into()); }
         if out.run_m <= 0.0 { return Err("--stairs の踏面は正の値".into()); }
@@ -80,11 +104,18 @@ impl StairsSpec {
             //  「登り切った」の判定が甘くなる）。
             let hx = self.run_m * 0.5;
             let cx = x0 + hx;
+            // **摩擦は明示し `priority` を付ける。** 書かないと MuJoCo は
+            // 足 geom と段 geom の摩擦を混ぜるので、go2_rl の
+            // `make_go2_stairs.py` が出す階段（`friction="0.8 0.02 0.01"
+            // condim="6" priority="1"`）と接触が一致せず、同じ方策・同じ
+            // 寸法でも結果が食い違う。**比較できることが目的**なので合わせる。
             s.push_str(&format!(
                 "    <geom name=\"stair_{n}\" type=\"box\" pos=\"{cx:.4} 0 {:.4}\" \
-                 size=\"{hx:.4} {hy:.4} {:.4}\" rgba=\"0.55 0.55 0.58 1\"/>\n",
+                 size=\"{hx:.4} {hy:.4} {:.4}\" rgba=\"0.45 0.45 0.5 1\" \
+                 friction=\"{mu:.3} 0.02 0.01\" condim=\"6\" priority=\"1\"/>\n",
                 top * 0.5,
-                top * 0.5
+                top * 0.5,
+                mu = self.friction
             ));
         }
         s
@@ -123,7 +154,7 @@ mod tests {
     /// ここを間違えると段が浮き、踏み外した足が下へ潜る。
     #[test]
     fn boxes_reach_the_ground_and_top_out_at_n_rise() {
-        let s = StairsSpec { rise_m: 0.2, steps: 3, run_m: 0.3, width_m: 3.0, start_x_m: 1.0 };
+        let s = StairsSpec { friction: 0.8, rise_m: 0.2, steps: 3, run_m: 0.3, width_m: 3.0, start_x_m: 1.0 };
         let x = s.to_mjcf();
         // 3 段目: 上面 0.6 → 中心 z 0.3、半長 z 0.3
         assert!(x.contains("stair_3"), "{x}");
@@ -135,7 +166,7 @@ mod tests {
     /// 段は x 方向に踏面ぶんずつ前へ出る。
     #[test]
     fn steps_advance_by_one_run_each() {
-        let s = StairsSpec { rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0, start_x_m: 0.0 };
+        let s = StairsSpec { friction: 0.8, rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0, start_x_m: 0.0 };
         let x = s.to_mjcf();
         assert!(x.contains("pos=\"0.1500 0 0.1000\""), "{x}");
         assert!(x.contains("pos=\"0.4500 0 0.2000\""), "{x}");

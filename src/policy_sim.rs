@@ -293,6 +293,10 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // 保持にしか使われない。名目ゲインにしておく。
         actuator_kp: ctl.initial_gains().0,
         actuator_kv: ctl.initial_gains().1,
+        // 関節の種類ごとのゲイン。Go2 の MIT モードは 12 関節すべて同じ
+        // Kp/Kd なので使わない（契約側が毎周期 impedance で運ぶ）。
+        actuator_kp_by_kind: None,
+        actuator_kv_by_kind: None,
         torque_scale: 1.0,
         velocity_kv: 20.0,
         base_height_m: body_height,
@@ -318,19 +322,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             .map(|s| s.to_string())
             .collect(),
         root_link: "base".into(),
+        // 階段。**接地摩擦も go2_rl のハーネスに合わせること**
+        // （あちらは --foot-friction 0.8 で測っている）。既定のままだと
+        // 段鼻で滑って Python 側の数字と比べられない。
+        extra_worldbody_xml: a.stairs.as_ref().map(|s| s.to_mjcf()),
     };
-    // 階段は**まだ場に置けない**。misa-plant-mujoco に
-    // `SimOptions::extra_worldbody_xml` を足す変更はローカルにあるが、
-    // go2-runner はこの crate を git から引いており、pin を進めると
-    // misa-runner の無関係な 10 コミット超（knee flip / WBC）まで入る。
-    // pin を揃えたらここを
-    //     extra_worldbody_xml: a.stairs.as_ref().map(|s| s.to_mjcf()),
-    // にして SimOptions へ渡す。**黙って平地で回さない**ために、
-    // 指定されたら止める。
-    if a.stairs.is_some() {
-        return Err("--stairs は misa-plant-mujoco の extra_worldbody_xml                     待ちでまだ効きません（平地で回して段差の数字だと誤解するのを防ぐため止めています）。                    詳細は src/stairs.rs の冒頭"
-            .into());
-    }
     let mut plant = MujocoPlant::new(axes, &opts)?;
     let mut obs = Observation::empty(12, 4);
     let mut cmd_out = Command::idle(12);

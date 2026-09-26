@@ -175,7 +175,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "articara"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/articara.git#6e0a7fd9c60e55503b56e7a799d4b2451696a92c"
+source = "git+https://github.com/takarakasai/articara.git#8799ebb4eb1fc47aa933d870ff8bbc48aa1e5a7d"
 dependencies = [
  "legged-estimation",
  "log",
@@ -989,7 +989,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2052,7 +2052,7 @@ dependencies = [
 [[package]]
 name = "legged-estimation"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/quadruped-gait.git#a7a531e17a535e13e4fa436b02a9a1def59d8cc1"
+source = "git+https://github.com/takarakasai/quadruped-gait.git#d3fdff2844923f4108947d468f40323fff0b8d85"
 dependencies = [
  "nalgebra",
  "quadruped-gait",
@@ -2335,7 +2335,7 @@ dependencies = [
 [[package]]
 name = "misa-core"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#5a6d04d6ee9c5439a42f9f638c654cfd3b5b1ec9"
+source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
 dependencies = [
  "serde",
 ]
@@ -2343,7 +2343,7 @@ dependencies = [
 [[package]]
 name = "misa-hal"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#5a6d04d6ee9c5439a42f9f638c654cfd3b5b1ec9"
+source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
 dependencies = [
  "libc",
  "lkmotor-driver",
@@ -2361,7 +2361,7 @@ dependencies = [
 [[package]]
 name = "misa-plant-mujoco"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#5a6d04d6ee9c5439a42f9f638c654cfd3b5b1ec9"
+source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
 dependencies = [
  "articara",
  "log",
@@ -2382,7 +2382,7 @@ dependencies = [
 [[package]]
 name = "misa-runner"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#5a6d04d6ee9c5439a42f9f638c654cfd3b5b1ec9"
+source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
 dependencies = [
  "env_logger",
  "legged-estimation",
@@ -2404,7 +2404,7 @@ dependencies = [
 [[package]]
 name = "misa-wbc"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-wbc.git#92e42a59af30edca053ce9b61c7a74c40568753b"
+source = "git+https://github.com/takarakasai/misa-wbc.git#5f6e8755fc50461824442e2b82e6167d70dd9e27"
 dependencies = [
  "clarabel",
  "nalgebra",
@@ -2413,7 +2413,7 @@ dependencies = [
 [[package]]
 name = "misarta"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misarta.git#5f677580c460cb1b83203fd71ce31e6c83f39478"
+source = "git+https://github.com/takarakasai/misarta.git#b0aeb128cbe415219ed1667dfc9b4f0389103efc"
 dependencies = [
  "clarabel",
  "nalgebra",
@@ -2428,7 +2428,7 @@ dependencies = [
 [[package]]
 name = "misarta-formats"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misarta.git#5f677580c460cb1b83203fd71ce31e6c83f39478"
+source = "git+https://github.com/takarakasai/misarta.git#b0aeb128cbe415219ed1667dfc9b4f0389103efc"
 dependencies = [
  "misarta",
  "nalgebra",
@@ -3167,7 +3167,7 @@ dependencies = [
 [[package]]
 name = "quadruped-gait"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/quadruped-gait.git#a7a531e17a535e13e4fa436b02a9a1def59d8cc1"
+source = "git+https://github.com/takarakasai/quadruped-gait.git#d3fdff2844923f4108947d468f40323fff0b8d85"
 dependencies = [
  "clarabel",
  "log",
@@ -3232,7 +3232,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3546,7 +3546,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3613,7 +3613,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
