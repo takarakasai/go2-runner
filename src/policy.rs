@@ -97,6 +97,16 @@ pub(crate) struct Args {
     pub impratio: Option<f64>,
     /// --sim: MuJoCo の `<option cone>`（既定 elliptic、同上）。
     pub cone: Option<String>,
+    /// --sim: 全可動関節のトルク上限 [N·m] を揃える。
+    ///
+    /// **なぜ要るか**: go2.misa は実機の定格そのままで hip/thigh 23.7・
+    /// **calf 45.43** を持つが、**学習側（IsaacLab の UNITREE_GO2_CFG）は
+    /// 全関節 23.5** で、Python 参照ハーネスもそれに合わせている。
+    /// 平地では追従誤差が小さく上限に当たらないので差が出ないが、
+    /// **階段では追従誤差が 4 rad 規模まで出て上限の領域に入る**ので、
+    /// ここが違うと同じ方策でも別の挙動になる。段差を Python と比べるときは
+    /// `--effort-limit 23.5` を付けること。
+    pub effort_limit: Option<f64>,
     /// --sim: 階段を置く `蹴上げ[m],段数,踏面[m],幅[m],開始x[m]`。
     ///
     /// **なぜ要るか**: これが無いと Rust ランタイムを平地でしか閉ループで
@@ -158,6 +168,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         vx_max: None,
         impratio: None,
         cone: None,
+        effort_limit: None,
         stairs: None,
         joint_damping: None,
         odom_calibrated: false,
@@ -220,6 +231,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
+            "--effort-limit" => out.effort_limit = Some(val(&mut it, "--effort-limit")?),
             "--stairs" => {
                 let v = it.next().ok_or("--stairs に値がありません")?;
                 out.stairs = Some(StairsSpec::parse(v)?);

@@ -113,11 +113,17 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
 /// 指定は**足には一切届かない**（指令 0.3 m/s の 8 s 走行で μ 0.1 と μ 0.8 の
 /// 軌跡がビット単位で一致する、という形で出る）。torsional / rolling 成分は
 /// .misa の値のまま残す（Python 参照プラントの `0.02 / 0.01` と同じ）。
-fn rewrite_misa(text: &str, damping: f64, friction: Option<f64>) -> (String, usize, usize) {
+fn rewrite_misa(
+    text: &str,
+    damping: f64,
+    friction: Option<f64>,
+    effort: Option<f64>,
+) -> (String, usize, usize, usize) {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::with_capacity(text.len());
     let mut joints = 0usize;
     let mut contacts = 0usize;
+    let mut efforts = 0usize;
     // go2.misa には `*_foot_fixed`（type = "fixed"、damping = 0）も damping の
     // 行を持つ。固定ジョイントに自由度は無いので書き換えても物理は変わらない
     // が、件数の表示が誤解を招くので可動関節だけを対象にする。ブロック内の
@@ -136,6 +142,13 @@ fn rewrite_misa(text: &str, damping: f64, friction: Option<f64>) -> (String, usi
         if !in_fixed && t.starts_with("damping") && line.contains('=') {
             out.push_str(&format!("{indent}damping = {damping}\n"));
             joints += 1;
+        } else if effort.is_some() && !in_fixed && t.starts_with("effort") && line.contains('=') {
+            // **学習側は全関節 23.5 N·m。** go2.misa は実機の定格そのままで
+            // hip/thigh 23.7・calf 45.43 を持つので、calf だけ 2 倍近く強い。
+            // 階段では追従誤差が 4 rad 規模まで出て**上限に当たる領域**に入るため、
+            // ここが違うと同じ方策でも挙動が変わる。
+            out.push_str(&format!("{indent}effort = {}\n", effort.unwrap()));
+            efforts += 1;
         } else if friction.is_some() && t.starts_with("friction") && t.contains('[') {
             // 配列形だけが接触摩擦。関節の乾性摩擦はスカラ（`friction = 0.0`）
             // なので、`[` の有無で見分ける。
@@ -177,7 +190,7 @@ fn rewrite_misa(text: &str, damping: f64, friction: Option<f64>) -> (String, usi
         }
         i += 1;
     }
-    (out, joints, contacts)
+    (out, joints, contacts, efforts)
 }
 
 /// `--joint-damping` / `--friction` 用に書き換えた .misa の一時コピーを作る。
@@ -192,10 +205,11 @@ fn misa_with_overrides(
     misa_path: &str,
     damping: f64,
     friction: Option<f64>,
+    effort: Option<f64>,
 ) -> Result<String, String> {
     let text =
         std::fs::read_to_string(misa_path).map_err(|e| format!("{misa_path} を読めません: {e}"))?;
-    let (out, joints, contacts) = rewrite_misa(&text, damping, friction);
+    let (out, joints, contacts, efforts) = rewrite_misa(&text, damping, friction, effort);
     if joints == 0 {
         return Err(format!("{misa_path} に damping の行が見つかりません"));
     }
@@ -205,9 +219,14 @@ fn misa_with_overrides(
              --friction は当てられません（このモデルでは無指定にしてください）"
         ));
     }
-    let tag = match friction {
-        Some(mu) => format!("damp{damping}_mu{mu}"),
-        None => format!("damp{damping}"),
+    if effort.is_some() && efforts == 0 {
+        return Err(format!("{misa_path} に可動関節の effort 行が見つかりません"));
+    }
+    let tag = match (friction, effort) {
+        (Some(mu), Some(e)) => format!("damp{damping}_mu{mu}_eff{e}"),
+        (Some(mu), None) => format!("damp{damping}_mu{mu}"),
+        (None, Some(e)) => format!("damp{damping}_eff{e}"),
+        (None, None) => format!("damp{damping}"),
     };
     let stem = std::path::Path::new(misa_path)
         .file_stem()
@@ -221,6 +240,10 @@ fn misa_with_overrides(
              接地摩擦の slide 成分を {mu}（{contacts} 面）に差し替えました"
         ),
         None => format!("受動粘性を {damping} N·m·s/rad に差し替えました（{joints} 関節）"),
+    };
+    let note = match effort {
+        Some(e) => format!("{note}、トルク上限を {e} N·m（{efforts} 関節）に統一しました"),
+        None => note,
     };
     // メッシュは .misa からの相対パスで引かれるので、元と同じディレクトリに
     // 置けない場合は解決できない。そこで元ディレクトリに置き直す。
@@ -284,7 +307,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 受動粘性ゼロなので、既定はメーカー値に寄せる。Menagerie の保守値で
     // 頑健性を見たいときは --joint-damping 2.0。
     let damping = a.joint_damping.unwrap_or(DEFAULT_JOINT_DAMPING);
-    let misa_path = misa_with_overrides(&a.misa, damping, a.friction)?;
+    let misa_path = misa_with_overrides(&a.misa, damping, a.friction, a.effort_limit)?;
     let opts = SimOptions {
         misa_path: misa_path.clone(),
         control_period_s: CONTROL_DT,
@@ -796,7 +819,7 @@ priority = 1
     /// 可動関節の粘性だけを書き換え、固定ジョイントは数えない（既存の挙動）。
     #[test]
     fn damping_touches_only_movable_joints() {
-        let (out, joints, _) = rewrite_misa(SAMPLE, 0.1, None);
+        let (out, joints, _, _) = rewrite_misa(SAMPLE, 0.1, None, None);
         assert_eq!(joints, 1);
         assert!(out.contains("damping = 0.1"));
         assert!(out.contains("damping = 0.0"), "固定ジョイントはそのまま");
@@ -806,7 +829,7 @@ priority = 1
     /// 関節の乾性摩擦（スカラの `friction = 0.0`）には触らない。
     #[test]
     fn friction_rewrites_the_slide_component_of_contact_geoms_only() {
-        let (out, _, contacts) = rewrite_misa(SAMPLE, 0.1, Some(0.4));
+        let (out, _, contacts, _) = rewrite_misa(SAMPLE, 0.1, Some(0.4), None);
         assert_eq!(contacts, 1);
         assert!(out.contains("    0.4,\n"), "slide 成分: {out}");
         assert!(out.contains("    0.02,"), "torsional はそのまま");
@@ -818,7 +841,7 @@ priority = 1
     /// 摩擦を指定しなければ .misa の接触摩擦は一切変わらない。
     #[test]
     fn without_friction_the_contacts_are_untouched() {
-        let (out, _, contacts) = rewrite_misa(SAMPLE, 0.1, None);
+        let (out, _, contacts, _) = rewrite_misa(SAMPLE, 0.1, None, None);
         assert_eq!(contacts, 0);
         assert!(out.contains("    0.8,"));
     }
@@ -827,7 +850,7 @@ priority = 1
     #[test]
     fn single_line_friction_array_is_rewritten_in_place() {
         let text = "damping = 2.0\nfriction = [0.8, 0.02, 0.01]\n";
-        let (out, joints, contacts) = rewrite_misa(text, 0.1, Some(0.4));
+        let (out, joints, contacts, _) = rewrite_misa(text, 0.1, Some(0.4), None);
         assert_eq!((joints, contacts), (1, 1));
         assert_eq!(out, "damping = 0.1\nfriction = [0.4, 0.02, 0.01]\n");
     }

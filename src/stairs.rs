@@ -13,28 +13,42 @@
 //! `--foot-friction 0.8` で測っており、既定のままだと段鼻で滑って比較に
 //! ならない。
 //!
-//! # 既知の食い違い（2026-09-26、未解決）
+//! # 閉ループの食い違いは**速度推定器**だった（2026-09-27）
 //!
-//! **平地は一致するが、階段は一致しない。** 同じ ONNX（go2_rl の P/model_15349）で:
+//! 同じ ONNX（go2_rl の Q3/model_19847）で、20 cm × 10 段・幅 3 m:
 //!
-//! | | Python 参照（go2.xml） | Rust（go2.misa） |
-//! |---|---|---|
-//! | 平地 0.6 m/s | 立位 0.356 m・直進 | 立位 0.360 m・直進（`--heading-hold 2 0.5` 併用時） |
-//! | 20 cm × 10 段 | **10/10 段** | **3〜4 段で転倒** |
+//! | 胴体速度の出どころ | 到達 x | 横ずれ | 胴体 z 最大 | 結果 |
+//! |---|---|---|---|---|
+//! | 配備の脚オドメトリ | 0.55 m | **8.09 m** | 0.981 m | 約 5 段で崩れ、横へ流れる |
+//! | `GO2_SIM_TRUTH_VEL=1`（真値） | 6.09 m | 0.20 m | **2.400 m** | **10 段すべて登り天端に立つ** |
 //!
-//! 原因は**衝突形状**とみられる。`go2.xml`（MuJoCo Menagerie）は胴体 1 箱 +
-//! 脚の円柱・球というプリミティブ 8 個ほどなのに対し、`go2.misa` は
-//! **視覚メッシュ 265 個をそのまま衝突形状に使っている**。平地は足裏しか
-//! 当たらないので差が出ないが、**階段では蹴上げに脛・腿が当たる**（go2_rl
-//! doc §8-§10: 登坂の律速は着地点で、当たる部位は常に後脚）ので、
-//! メッシュの角が段鼻に引っかかる。
+//! **方策もプラントも悪くない。観測 48 次元のうち胴体速度 3 次元が階段で壊れる。**
+//! 平地では推定 +0.494 対 真値 +0.528（−6 %）なのに、階段では
+//! **推定 −0.297 対 真値 +0.419 と符号が反転する**。
 //!
-//! 接触パラメータ（friction / condim / priority）と段の寸法は Python 側と
-//! 一致させてあり、方位流れも `--heading-hold` で消したうえでまだ転ぶので、
-//! **配線ではなくプラントの差**。直すには go2.misa の衝突形状を
-//! プリミティブに置き換える必要がある（未着手）。
+//! 潰した仮説（すべて外れ）:
+//! - **衝突形状のメッシュ**: go2.misa はメッシュ 21 個を衝突に使うが、
+//!   同じリンクにプリミティブ（go2.xml と同寸法）も持っており、外側は
+//!   プリミティブが覆っている。メッシュを外した `go2_primcol.misa` を作って
+//!   比べたが、平地も階段も**数値が 1 桁まで完全に一致**した＝当たっていない。
+//! - **トルク上限**: go2.misa は実機定格（hip/thigh 23.7、calf 45.43）、学習側は
+//!   全関節 23.5。`--effort-limit 23.5` で揃えたが**むしろ悪化**（4.7 s で転倒、
+//!   追従誤差 10.9 rad）。
+//! - **制御周期**: 方策 50 Hz・物理 500 Hz（DECIMATION 10）で Python と一致。
+//! - **方位流れ**: `--heading-hold 2.0 0.5` で横流れは消えるが転倒は直らない。
+//!
+//! 推定器の**式**は学習側と同一（剛体関係から
+//! `v_base − v_foot = −R(ω × p_foot_b + J q̇)`。mit_rl の
+//! `contact_leg_odometry_lin_vel_b` と同じ量）。違うのは実装で、残る容疑は
+//! `src/estimator.rs` の **10 Hz ローパス**（階段では接地が疎で飛び飛びなので
+//! 遅れが大きい）、**接地判定の取りこぼし**（盲目契約は計画 swing を持たないので
+//! プラントの接触センサに落ち、取れないと `unwrap_or(true)` で遊脚を接地と
+//! 数える＝符号反転の説明になる）、解析 FK/ヤコビアンの数値。
+//!
+//! **これは実機で必ず出る問題**（実機には真値が無い）。
+//! 段差を実機で走らせる前にここを直すこと。
 
-/// `--stairs` の指定。`蹴上げ,段数,踏面,幅,開始x,摩擦` の順、後ろは省略可。
+/// `--stairs` の指定。`蹴上げ,段数,踏面,幅,開始x,摩擦,天端の踏み場` の順、後ろは省略可。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StairsSpec {
     /// 1 段の高さ [m]。
@@ -49,11 +63,25 @@ pub struct StairsSpec {
     pub start_x_m: f64,
     /// 段の接触摩擦の滑り成分。go2_rl のハーネスの既定と同じ 0.8。
     pub friction: f64,
+    /// 最上段の先に足す踏み場の奥行き [m]。0 なら足さない。
+    ///
+    /// **なぜ要るか**: 天端に踏み場が無いと、登りきった機体がそのまま踏み外す。
+    /// 「登れたか」と「天端で踏み外したか」が混ざって判定できない
+    /// （go2_rl 側も同じ理由で `make_go2_stairs.py --top-platform` を持つ）。
+    pub top_platform_m: f64,
 }
 
 impl Default for StairsSpec {
     fn default() -> Self {
-        Self { rise_m: 0.20, steps: 10, run_m: 0.30, width_m: 3.0, start_x_m: 1.2, friction: 0.8 }
+        Self {
+            rise_m: 0.20,
+            steps: 10,
+            run_m: 0.30,
+            width_m: 3.0,
+            start_x_m: 1.2,
+            friction: 0.8,
+            top_platform_m: 2.0,
+        }
     }
 }
 
@@ -80,6 +108,7 @@ impl StairsSpec {
         if let Some(t) = f.get(3) { out.width_m = num(t, "幅")?; }
         if let Some(t) = f.get(4) { out.start_x_m = num(t, "開始x")?; }
         if let Some(t) = f.get(5) { out.friction = num(t, "摩擦")?; }
+        if let Some(t) = f.get(6) { out.top_platform_m = num(t, "天端の踏み場")?; }
         if out.rise_m <= 0.0 { return Err("--stairs の蹴上げは正の値".into()); }
         if out.steps == 0 { return Err("--stairs の段数は 1 以上".into()); }
         if out.run_m <= 0.0 { return Err("--stairs の踏面は正の値".into()); }
@@ -118,6 +147,20 @@ impl StairsSpec {
                 mu = self.friction
             ));
         }
+        if self.top_platform_m > 0.0 {
+            let top = self.steps as f64 * self.rise_m;
+            let x0 = self.start_x_m + self.steps as f64 * self.run_m;
+            let hx = self.top_platform_m * 0.5;
+            s.push_str(&format!(
+                "    <geom name=\"stair_top\" type=\"box\" pos=\"{:.4} 0 {:.4}\" \
+                 size=\"{hx:.4} {hy:.4} {:.4}\" rgba=\"0.45 0.45 0.5 1\" \
+                 friction=\"{mu:.3} 0.02 0.01\" condim=\"6\" priority=\"1\"/>\n",
+                x0 + hx,
+                top * 0.5,
+                top * 0.5,
+                mu = self.friction
+            ));
+        }
         s
     }
 }
@@ -129,6 +172,18 @@ fn self_checked(s: StairsSpec) -> StairsSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 天端の踏み場は最上段と同じ高さで、階段の先に付く。
+    #[test]
+    fn top_platform_sits_level_with_the_last_step() {
+        let s = StairsSpec { rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0,
+                             start_x_m: 0.0, friction: 0.8, top_platform_m: 1.0 };
+        let x = s.to_mjcf();
+        // 最上段の上面 0.4 -> 中心 z 0.2、半長 z 0.2。x は 0.6 から 1.0 m ぶん。
+        assert!(x.contains("stair_top"), "{x}");
+        assert!(x.contains("pos=\"1.1000 0 0.2000\""), "{x}");
+        assert!(x.contains("size=\"0.5000 0.5000 0.2000\""), "{x}");
+    }
 
     #[test]
     fn parse_defaults_and_overrides() {
@@ -154,7 +209,7 @@ mod tests {
     /// ここを間違えると段が浮き、踏み外した足が下へ潜る。
     #[test]
     fn boxes_reach_the_ground_and_top_out_at_n_rise() {
-        let s = StairsSpec { friction: 0.8, rise_m: 0.2, steps: 3, run_m: 0.3, width_m: 3.0, start_x_m: 1.0 };
+        let s = StairsSpec { friction: 0.8, top_platform_m: 0.0, rise_m: 0.2, steps: 3, run_m: 0.3, width_m: 3.0, start_x_m: 1.0 };
         let x = s.to_mjcf();
         // 3 段目: 上面 0.6 → 中心 z 0.3、半長 z 0.3
         assert!(x.contains("stair_3"), "{x}");
@@ -166,7 +221,7 @@ mod tests {
     /// 段は x 方向に踏面ぶんずつ前へ出る。
     #[test]
     fn steps_advance_by_one_run_each() {
-        let s = StairsSpec { friction: 0.8, rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0, start_x_m: 0.0 };
+        let s = StairsSpec { friction: 0.8, top_platform_m: 0.0, rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0, start_x_m: 0.0 };
         let x = s.to_mjcf();
         assert!(x.contains("pos=\"0.1500 0 0.1000\""), "{x}");
         assert!(x.contains("pos=\"0.4500 0 0.2000\""), "{x}");
