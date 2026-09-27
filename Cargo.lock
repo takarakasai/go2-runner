@@ -175,7 +175,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "articara"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/articara.git#8799ebb4eb1fc47aa933d870ff8bbc48aa1e5a7d"
+source = "git+https://github.com/takarakasai/articara.git?branch=fix%2Fcontact-force-magnitude#4f061949a2d3bbc0e3fe0a4aab79f78fcf98cfd3"
 dependencies = [
  "legged-estimation",
  "log",
@@ -2335,7 +2335,7 @@ dependencies = [
 [[package]]
 name = "misa-core"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
+source = "git+https://github.com/takarakasai/misa-runner.git?branch=fix%2Fstance-by-force-magnitude#0cc482a53c037b56df9bcf954f995b768f7851e8"
 dependencies = [
  "serde",
 ]
@@ -2343,7 +2343,7 @@ dependencies = [
 [[package]]
 name = "misa-hal"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
+source = "git+https://github.com/takarakasai/misa-runner.git?branch=fix%2Fstance-by-force-magnitude#0cc482a53c037b56df9bcf954f995b768f7851e8"
 dependencies = [
  "libc",
  "lkmotor-driver",
@@ -2361,7 +2361,7 @@ dependencies = [
 [[package]]
 name = "misa-plant-mujoco"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
+source = "git+https://github.com/takarakasai/misa-runner.git?branch=fix%2Fstance-by-force-magnitude#0cc482a53c037b56df9bcf954f995b768f7851e8"
 dependencies = [
  "articara",
  "log",
@@ -2382,7 +2382,7 @@ dependencies = [
 [[package]]
 name = "misa-runner"
 version = "0.1.0"
-source = "git+https://github.com/takarakasai/misa-runner.git#c30c284db1e884382d60396a8cc476fb8de47a39"
+source = "git+https://github.com/takarakasai/misa-runner.git?branch=fix%2Fstance-by-force-magnitude#0cc482a53c037b56df9bcf954f995b768f7851e8"
 dependencies = [
  "env_logger",
  "legged-estimation",

@@ -31,11 +31,14 @@
 //! 壊れて方策が分布外へ出る。
 //!
 //! 学習側（mit_rl `contact_leg_odometry_lin_vel_b`）も Python 参照ハーネスも
-//! **力の大きさ**で判定している。`stance_from_contacts`（policy_sim.rs）で
-//! そちらに揃えた。`GO2_STANCE_FZ=1` で従来に戻せる。
+//! **力の大きさ**で判定している。
 //!
-//! **本当の修正箇所は articara の `contact_force_per_foot`**（あそこを
-//! 大きさにすれば WBC 側も含めて直る）。ここでの上書きは go2-runner に閉じた対処。
+//! **直した場所**: articara に `contact_force_magnitude_per_foot` を足し
+//! （`contact_force_per_foot` は荷重用として意味を変えずに残した）、
+//! misa-plant-mujoco の接地フラグをそちらに切り替えた。
+//! go2-runner 側にあった暫定の上書きは外した（プラント側の修正だけで
+//! **数値が完全に一致**することを確認済み: 接地 1.96 本、推定 +0.400 対
+//! 真値 +0.389、開始位置 4 通りとも 10 段完登）。
 //!
 //! **潰した仮説（すべて外れ）**
 //! - **衝突形状のメッシュ**: go2.misa はメッシュ 21 個を衝突に使うが、同じ

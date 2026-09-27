@@ -112,41 +112,6 @@ fn check_viz_port(endpoint: &str) -> Result<(), String> {
 /// priority 付きの geom が接触ペアの摩擦を単独で決めるので、`<default>` 経由の
 /// 指定は**足には一切届かない**（指令 0.3 m/s の 8 s 走行で μ 0.1 と μ 0.8 の
 
-/// 足ごとの接地を**接触力の大きさ**で決める。
-///
-/// **なぜプラントの `Observation::contacts` を使わないか**:
-/// misa-plant-mujoco はプラントの `contact_force_per_foot`（articara）を
-/// 使っており、あれは接触力の**世界系 z 成分だけ**を足す
-/// （`out[slot] += c.force_world[2]`）。法線が +z の平地なら一致するが、
-/// **階段は蹴上げや段鼻で法線が傾き、符号違いの成分が相殺して接地を
-/// 取りこぼす**。学習側（mit_rl の `contact_leg_odometry_lin_vel_b`）と
-/// Python 参照ハーネスはどちらも**力の大きさ**で判定しているので、そちらに揃える。
-///
-/// 実測（2026-09-27、20 cm × 10 段）: 世界系 z だと脚オドメトリの偏りが
-/// **−0.72 m/s** になり方策が分布外へ出て 5 段で崩れる。大きさにすると
-/// 偏り **+0.01 m/s** で 10 段登り切る。
-fn stance_from_contacts<I>(contacts: I, threshold_n: f64) -> [bool; 4]
-where
-    I: IntoIterator<Item = (String, String, f64)>,
-{
-    const FEET: [&str; 4] = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"];
-    let mut f = [0.0f64; 4];
-    for (body1, body2, force) in contacts {
-        // 世界側は名前が空。両方とも非空なら自己干渉なので飛ばす。
-        let name: &str = match (body1.is_empty(), body2.is_empty()) {
-            (true, false) => body2.as_str(),
-            (false, true) => body1.as_str(),
-            _ => continue,
-        };
-        if let Some(slot) = FEET.iter().position(|l| *l == name) {
-            f[slot] += force;
-        }
-    }
-    core::array::from_fn(|l| f[l] > threshold_n)
-}
-
-/// 接地とみなす接触力 [N]。学習側・Python 参照ハーネスと同じ 5 N。
-const CONTACT_THRESHOLD_N: f64 = 5.0;
 /// 軌跡がビット単位で一致する、という形で出る）。torsional / rolling 成分は
 /// .misa の値のまま残す（Python 参照プラントの `0.02 / 0.01` と同じ）。
 fn rewrite_misa(
@@ -452,8 +417,6 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut fk_checked = false;
     // 脚オドメトリの診断（FK 照合・恒等式の突き合わせ）。既定は静か。
     let trace_odom = std::env::var_os("GO2_TRACE_ODOM").is_some();
-    // 既定で有効。`GO2_STANCE_FZ=1` で従来（世界系 z 成分）に戻せる。
-    let stance_by_magnitude = std::env::var("GO2_STANCE_FZ").ok().as_deref() != Some("1");
     let mut stance_dbg = [true; 4];
     let (mut slip_sum, mut slip_x_sum, mut slip_n) = (0.0f64, 0.0f64, 0u64);
     if a.odom_calibrated {
@@ -549,16 +512,13 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // Natural は計画 swing、Pure は計画が無いので接地センサを使う。
         let stance = match ctl.swing() {
             Some(sw) => [!sw[0], !sw[1], !sw[2], !sw[3]],
-            None if stance_by_magnitude => {
-                let pairs = plant.sim().contacts().into_iter().map(|c| {
-                    (c.body1, c.body2, {
-                        let f = c.force_world;
-                        (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt()
-                    })
-                });
-                stance_from_contacts(pairs, CONTACT_THRESHOLD_N)
-            }
             None => {
+                // プラントの接地フラグ。**接触力の大きさ**で切られている
+                // （misa-plant-mujoco → articara
+                // `contact_force_magnitude_per_foot`）。世界系 z 成分で切って
+                // いた頃は階段で接地を取りこぼし、脚オドメトリの偏りが
+                // −0.72 m/s になって方策が分布外へ出ていた。詳細は
+                // `src/stairs.rs` の冒頭。
                 core::array::from_fn(|l| obs.contacts.get(l).copied().flatten().unwrap_or(true))
             }
         };
@@ -1021,43 +981,3 @@ priority = 1
     }
 }
 
-#[cfg(test)]
-mod stance_tests {
-    use super::{stance_from_contacts, CONTACT_THRESHOLD_N};
-
-    fn c(body: &str, force: f64) -> (String, String, f64) {
-        // 世界側は空名（articara の ContactInfo の約束）。
-        (String::new(), body.to_string(), force)
-    }
-
-    #[test]
-    fn counts_a_foot_once_its_force_passes_the_threshold() {
-        let s = stance_from_contacts(vec![c("FL_foot", 40.0), c("RR_foot", 3.0)], CONTACT_THRESHOLD_N);
-        assert_eq!(s, [true, false, false, false]);
-    }
-
-    /// **同じ足の複数接点は足し合わせる。** 段鼻では 1 本の足が 2 点で
-    /// 当たり、1 点ずつでは閾値に届かないことがある。
-    #[test]
-    fn sums_multiple_contact_points_on_the_same_foot() {
-        let s = stance_from_contacts(vec![c("FR_foot", 3.0), c("FR_foot", 3.0)], CONTACT_THRESHOLD_N);
-        assert_eq!(s, [false, true, false, false]);
-    }
-
-    /// 自己干渉（両側とも機体）は接地ではない。
-    #[test]
-    fn ignores_self_collisions() {
-        let s = stance_from_contacts(
-            vec![("FL_calf".to_string(), "FL_foot".to_string(), 99.0)],
-            CONTACT_THRESHOLD_N,
-        );
-        assert_eq!(s, [false; 4]);
-    }
-
-    /// 足でない部位が地面に当たっても接地には数えない。
-    #[test]
-    fn ignores_non_foot_ground_contacts() {
-        let s = stance_from_contacts(vec![c("base", 200.0), c("RL_thigh", 50.0)], CONTACT_THRESHOLD_N);
-        assert_eq!(s, [false; 4]);
-    }
-}

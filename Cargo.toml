@@ -26,7 +26,11 @@ path = "src/main.rs"
 # misa-runner は git 依存（namiashi-runner2 と同じ形）。misa_core / misa_hal は
 # misa-runner の再エクスポートを使う — 自前で引くと git の版が食い違ったとき
 # 「同じ名前の別の型」になる。
-misa-runner = { git = "https://github.com/takarakasai/misa-runner.git" }
+# **このブランチだけの暫定 pin**。接地を接触力の大きさで見る修正は
+# misa-runner の fix/stance-by-force-magnitude にある（さらにその先で
+# articara の fix/contact-force-magnitude に依存）。両方が main に入ったら
+# この `branch = ...` を外すこと。
+misa-runner = { git = "https://github.com/takarakasai/misa-runner.git", branch = "fix/stance-by-force-magnitude" }
 # RL 方策の実行系。misa-runner / articara と同じ git 依存。版は Cargo.lock
 # が固定するので、更新は `cargo update -p misa-policy-runner` で明示的に行う
 # （path 依存だった間は、隣のチェックアウトが古い PC で E0432
@@ -46,6 +50,7 @@ env_logger = "0.11"
 # 同名 path 依存と同じ git ソースなので、同一インスタンスに解決される。
 [dependencies.misa-plant-mujoco]
 git = "https://github.com/takarakasai/misa-runner.git"
+branch = "fix/stance-by-force-magnitude"
 package = "misa-plant-mujoco"
 optional = true
 
