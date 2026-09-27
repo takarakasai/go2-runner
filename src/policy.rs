@@ -66,8 +66,15 @@ const LIE_POS: [f64; 12] = [
     -0.2, 1.36, -2.65, // RR
     0.2, 1.36, -2.65, // RL
 ];
-/// これを超えたら即脱力（rad）。
-const TILT_ABORT_RAD: f64 = 35.0 * std::f64::consts::PI / 180.0;
+/// これを超えたら即脱力（度）。既定 35°。
+///
+/// **段差では上げること。** 盲目段差の方策は、**登りきる試行でも**胴体を
+/// 大きく傾ける（MuJoCo 実測: 下り 200 mm で最大 39.8°、登り中は 50° 超）。
+/// 35° のままだと**成功している登坂を中断してしまう**。
+/// 段差を走らせるときは `--tilt-abort 65` 程度にする
+/// （転倒の判定に使っている 45° より上、完全な横転 90° より下）。
+/// 平地のテレオペでは既定のままでよい。
+const TILT_ABORT_DEG_DEFAULT: f64 = 35.0;
 /// 推論失敗・観測異常がこの回数続いたら中断。
 const MAX_CONSECUTIVE_FAULTS: u32 = 10;
 
@@ -97,6 +104,9 @@ pub(crate) struct Args {
     pub impratio: Option<f64>,
     /// --sim: MuJoCo の `<option cone>`（既定 elliptic、同上）。
     pub cone: Option<String>,
+    /// 即脱力する傾きの閾値 [度]。既定 35。**段差では 65 程度に上げる**
+    /// （登りきる試行でも 50° を超えるため。詳細は `TILT_ABORT_DEG_DEFAULT`）。
+    pub tilt_abort_deg: f64,
     /// --sim: 全可動関節のトルク上限 [N·m] を揃える。
     ///
     /// **なぜ要るか**: go2.misa は実機の定格そのままで hip/thigh 23.7・
@@ -168,6 +178,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         vx_max: None,
         impratio: None,
         cone: None,
+        tilt_abort_deg: TILT_ABORT_DEG_DEFAULT,
         effort_limit: None,
         stairs: None,
         joint_damping: None,
@@ -231,6 +242,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
+            "--tilt-abort" => {
+                let v: f64 = val(&mut it, "--tilt-abort")?;
+                if !(5.0..=89.0).contains(&v) {
+                    return Err("--tilt-abort は 5〜89 度".into());
+                }
+                out.tilt_abort_deg = v;
+            }
             "--effort-limit" => out.effort_limit = Some(val(&mut it, "--effort-limit")?),
             "--stairs" => {
                 let v = it.next().ok_or("--stairs に値がありません")?;
@@ -888,6 +906,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ctl.reset();
     let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
     let mut held: PolicyTick = ctl.hold();
+    let tilt_abort_rad = a.tilt_abort_deg * std::f64::consts::PI / 180.0;
     let mut faults: u32 = 0;
     let mut status = Instant::now();
     let run_start = Instant::now();
@@ -941,7 +960,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         // 傾きの即時脱力（projected gravity の z から）。
         let g_b = misa_policy_runner::support::projected_gravity(&inp.quat_wxyz);
         let tilt = (-g_b[2]).clamp(-1.0, 1.0).acos();
-        if tilt > TILT_ABORT_RAD {
+        if tilt > tilt_abort_rad {
             plant.send_limp()?;
             abort = Some(format!(
                 "傾き {:.0}° — 脱力して中断しました",
