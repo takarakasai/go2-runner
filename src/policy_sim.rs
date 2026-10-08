@@ -263,6 +263,19 @@ fn misa_with_overrides(
 
 pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut ctl = Ctl::load(a)?;
+    // 2 本目の方策（用途で切り替える）。契約が同じなので ONNX の差し替えだけ。
+    let mut ctl_alt = match a.model_alt.as_deref() {
+        Some(path) => {
+            let mut alt = a.clone();
+            alt.model = path.to_string();
+            alt.model_alt = None;
+            let c = Ctl::load(&alt)?;
+            eprintln!("policy-sim: 2 本目 {path}（{}）", c.name());
+            Some(c)
+        }
+        None => None,
+    };
+    let mut swapped = false;
     if a.odom_calibrated && !ctl.wants_velocity() {
         return Err(
             "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
@@ -658,6 +671,23 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 a.cmd_yaw_accel,
                 CONTROL_DT * DECIMATION as f64,
             );
+            // **指定時刻で 2 本目へ入れ替える**（切り替えの滑らかさの計測用）。
+            // 出ていく方の last_action と保持関節目標を引き継ぐので、
+            // 観測と出力が切り替えの瞬間に連続になる。
+            if !swapped {
+                if let (Some(t_swap), Some(alt)) = (a.swap_at_s, ctl_alt.as_mut()) {
+                    if k as f64 * CONTROL_DT >= t_swap {
+                        crate::policy::hand_over(&ctl, alt)?;
+                        std::mem::swap(&mut ctl, alt);
+                        swapped = true;
+                        eprintln!(
+                            "policy-sim: t={:.2}s 方策を入れ替えました -> {}\r",
+                            k as f64 * CONTROL_DT,
+                            ctl.name()
+                        );
+                    }
+                }
+            }
             match ctl.tick(&inp, cmd_applied, vel_body) {
                 Ok(tk) => {
                     if !tk.anomalies.is_empty() {

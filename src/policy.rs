@@ -78,6 +78,7 @@ const TILT_ABORT_DEG_DEFAULT: f64 = 35.0;
 /// 推論失敗・観測異常がこの回数続いたら中断。
 const MAX_CONSECUTIVE_FAULTS: u32 = 10;
 
+#[derive(Clone)]
 pub(crate) struct Args {
     pub model: String,
     pub iface: Option<String>,
@@ -107,6 +108,16 @@ pub(crate) struct Args {
     /// 即脱力する傾きの閾値 [度]。既定 35。**段差では 65 程度に上げる**
     /// （登りきる試行でも 50° を超えるため。詳細は `TILT_ABORT_DEG_DEFAULT`）。
     pub tilt_abort_deg: f64,
+    /// 2 本目の方策（同じ契約）。用途で切り替えるために持つ。
+    ///
+    /// **なぜ 2 本持つか**: 段差用（P）と平地省エネ用（E）は**原理的に
+    /// 両立しない**（段を越えるには脚を上げるしかないが、省エネには下げたい）。
+    /// go2_rl で 7 軸試して、目標条件を落とさずに両立できたものは無かった。
+    /// 契約（観測 48 / 行動 12 / Kp 25・Kd 0.5）は同じなので、
+    /// **入れ替えは ONNX の差し替えだけ**で済む。
+    pub model_alt: Option<String>,
+    /// --sim: この時刻 [s] に `--model-alt` へ切り替える（切り替えの計測用）。
+    pub swap_at_s: Option<f64>,
     /// --sim: 全可動関節のトルク上限 [N·m] を揃える。
     ///
     /// **なぜ要るか**: go2.misa は実機の定格そのままで hip/thigh 23.7・
@@ -161,6 +172,8 @@ pub(crate) struct Args {
 
 fn parse(args: &[String]) -> Result<Args, String> {
     let mut out = Args {
+        model_alt: None,
+        swap_at_s: None,
         model: String::new(),
         iface: iface_from_env(),
         cmd0: [0.0; 3],
@@ -242,6 +255,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--viz-rate" => out.viz_rate_hz = val(&mut it, "--viz-rate")?,
             "--friction" => out.friction = Some(val(&mut it, "--friction")?),
+            "--model-alt" => {
+                out.model_alt = Some(it.next().ok_or("--model-alt に値がありません")?.clone())
+            }
+            "--swap-at" => out.swap_at_s = Some(val(&mut it, "--swap-at")?),
             "--tilt-abort" => {
                 let v: f64 = val(&mut it, "--tilt-abort")?;
                 if !(5.0..=89.0).contains(&v) {
@@ -308,6 +325,27 @@ pub(crate) enum Ctl {
     /// 盲目（内界センサのみ）の段差契約: 観測 48·H、行動 12、ゲイン固定。
     /// go2_rl `artifacts/GO2_BLIND_STAIRS20.md`。
     Blind(BlindController),
+}
+
+/// 走行中に方策を入れ替える。**同じ契約（盲目）どうしのみ。**
+///
+/// 出ていく方の `last_action` と保持関節目標を引き継ぐ。引き継がないと
+/// 新しい方策は「直前に何もしていない」という嘘の観測を見ることになり、
+/// 歩行中の切り替えでは分布外の入力になる（misa-policy-runner
+/// `blind.rs::adopt_state` の説明）。
+///
+/// 契約が違う方策どうしは**観測の次元も意味も違う**ので引き継げない。
+/// 黙って繋ぐと分布外のまま走るので、エラーにする。
+pub(crate) fn hand_over(from: &Ctl, to: &mut Ctl) -> Result<(), String> {
+    match (from, to) {
+        (Ctl::Blind(a), Ctl::Blind(b)) => {
+            b.adopt_state(a.last_action(), a.q_hold_isaac());
+            Ok(())
+        }
+        _ => Err("方策の入れ替えは盲目契約どうしのみ対応しています\
+                  （契約が違うと観測の意味が違うので引き継げません）"
+            .into()),
+    }
 }
 
 impl Ctl {
