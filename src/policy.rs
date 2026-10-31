@@ -1170,6 +1170,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 base.height_m,
                 tilt.to_degrees(),
             );
+            // `--hold` は**観測の符号を確かめる**ための姿勢保持なので
+            // （立ち上げ手順書の手順 3: 機体を手で傾け・脚を動かす）、
+            // 方策が実際に見ている生の量を出す。導出した roll/pitch だけでは
+            // ジャイロと関節角の符号が確かめられない。
+            if a.hold {
+                let q = &inp.joint_q_go2; // Go2 SDK 順 = FR, FL, RR, RL × hip/thigh/calf
+                eprintln!(
+                    "\r\npolicy: hold  重力方向 g=({:+.3},{:+.3},{:+.3})  \
+                     ジャイロ=({:+.3},{:+.3},{:+.3}) rad/s\r\n\
+                     \x20      関節角 FR({:+.2},{:+.2},{:+.2}) FL({:+.2},{:+.2},{:+.2}) \
+                     RR({:+.2},{:+.2},{:+.2}) RL({:+.2},{:+.2},{:+.2}) rad\r",
+                    g_b[0], g_b[1], g_b[2],
+                    inp.gyro_rad_s[0], inp.gyro_rad_s[1], inp.gyro_rad_s[2],
+                    q[0], q[1], q[2], q[3], q[4], q[5],
+                    q[6], q[7], q[8], q[9], q[10], q[11],
+                );
+            }
             let _ = std::io::stderr().flush();
             status = Instant::now();
         }

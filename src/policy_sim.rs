@@ -276,6 +276,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         None => None,
     };
     let mut swapped = false;
+    if a.hold {
+        eprintln!(
+            "policy-sim: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します"
+        );
+    }
     if a.odom_calibrated && !ctl.wants_velocity() {
         return Err(
             "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
@@ -648,7 +653,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         );
 
         // ── 50 Hz: 推論 ──
-        if k % DECIMATION == 0 {
+        // `--hold` のときは推論を回さず保持する。実機の手順 3（観測の符号を
+        // 確かめる姿勢保持）を sim で予行できるようにするため。
+        // **以前は sim 側でこのフラグを黙って無視していた**ので、
+        // 「手順 3 を sim で通した」つもりで何も通っていなかった。
+        if !a.hold && k % DECIMATION == 0 {
             // Pure76 は体速度推定を**入力**に使う。実機は脚オドメトリしか
             // 無いが、学習時の入力は真値（Isaac の base_lin_vel）だった。
             // GO2_SIM_TRUTH_VEL=1 で MuJoCo の真値に差し替えて、推定誤差が
@@ -857,6 +866,20 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 imu.rpy_rad[0].to_degrees(),
                 imu.rpy_rad[1].to_degrees(),
             );
+            if a.hold {
+                let g_b = misa_policy_runner::support::projected_gravity(&inp.quat_wxyz);
+                let q = &inp.joint_q_go2; // Go2 SDK 順 = FR, FL, RR, RL × hip/thigh/calf
+                eprintln!(
+                    "\r\npolicy-sim: hold  重力方向 g=({:+.3},{:+.3},{:+.3})  \
+                     ジャイロ=({:+.3},{:+.3},{:+.3}) rad/s\r\n\
+                     \x20          関節角 FR({:+.2},{:+.2},{:+.2}) FL({:+.2},{:+.2},{:+.2}) \
+                     RR({:+.2},{:+.2},{:+.2}) RL({:+.2},{:+.2},{:+.2}) rad\r",
+                    g_b[0], g_b[1], g_b[2],
+                    inp.gyro_rad_s[0], inp.gyro_rad_s[1], inp.gyro_rad_s[2],
+                    q[0], q[1], q[2], q[3], q[4], q[5],
+                    q[6], q[7], q[8], q[9], q[10], q[11],
+                );
+            }
             use std::io::Write as _;
             let _ = std::io::stderr().flush();
             status = Instant::now();
