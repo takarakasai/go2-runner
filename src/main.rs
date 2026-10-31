@@ -25,6 +25,7 @@ mod policy;
 #[cfg(feature = "sim")]
 mod policy_sim;
 mod stairs;
+mod suspend;
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

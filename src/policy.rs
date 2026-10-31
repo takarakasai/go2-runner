@@ -13,8 +13,12 @@
 //!                [--stride-gain 1.55] [--yaw-stride-gain 2.0]
 //!                [--body-height 0.30 | --low-stance]
 //!                [--vx-max 0.6] [--joint-damping 0.2] [--hold]
-//!                [--no-keyboard] [--no-release]
+//!                [--suspend] [--no-keyboard] [--no-release]
 //! ```
+//!
+//! `--suspend` は**吊って回すとき**（立ち上げ手順の手順 4・5）に付ける。
+//! 脚の発振と左右差を数で出す（`src/suspend.rs`）。`--sim` では胴体を
+//! 世界に溶接して足を浮かせるので、吊り台そのものが予行できる。
 //!
 //! 立位高さ: `--body-height` は旋回ストライドゲインを自動で較正し直す
 //! (`TrajectoryCfg::with_height`)。低くすると同じ方策が旋回を過追従する
@@ -163,6 +167,16 @@ pub(crate) struct Args {
     /// 0.069 を引くと 0.3 m/s の追従が 86 → 91 %、0.2 m/s が 69 → 76 %、傾きは不変。
     /// go2_rl/doc/gru_estimator_bias_correction.md。**実機では静止させて実測すること。**
     pub estimator_vx_bias: f64,
+    /// **吊った状態で回している**（立ち上げ手順の手順 4・5）。
+    ///
+    /// `--sim` では胴体を世界に溶接して足を浮かせる（吊り台の代わり）。
+    /// 実機では物理は変わらない — 変わるのは**診断の出力**で、脚の
+    /// 発振（|dq| と振動周波数）と左右差を数で出す。`src/suspend.rs`。
+    ///
+    /// **手順 4・5 は sim で予行できない唯一の段だった**。目で見る合否
+    /// （「静かに保持」「左右が揃う」）は記録に残らず、実機と sim を
+    /// 突き合わせられない。
+    pub suspend: bool,
     /// 世界系ヨーの PI 方位保持 `(KP, KI)`。直進指令（|wz| < 0.05）の間、IMU の
     /// ヨーを「操作開始時のヨー + ∫指令 wz」に保つ補正を wz 指令へ足す。方策は
     /// 変えない。go2_rl/doc/gru_straightness_heading_servo_20260921.md: 親 GRU の
@@ -204,6 +218,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         cmd_accel: 0.5,
         cmd_yaw_accel: 0.7,
         heading_hold: None,
+        suspend: false,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -245,6 +260,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 }
             }
             "--hold" => out.hold = true,
+            "--suspend" => out.suspend = true,
             "--no-keyboard" => out.keyboard = false,
             "--no-release" => out.release = false,
             "--sim" => out.sim = true,
@@ -973,6 +989,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     ctl.reset();
     let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
+    // 吊り診断（手順 4・5）。実機は物理が吊られているので、ここは出力だけ。
+    // 脚の診断は吊りの判定に要るが、**接地したままでも取れると比較になる**
+    // （起動の蹴りが吊り特有なのか方策そのものなのかは、同じ数字を接地で
+    // 取らないと分からない）。GO2_TRACE_LEGS=1 でいつでも出す。
+    let trace_legs = std::env::var("GO2_TRACE_LEGS").ok().as_deref() == Some("1");
+    let mut susp = (a.suspend || trace_legs).then(|| {
+        if a.suspend {
+        eprintln!(
+            "policy: --suspend — 吊った状態として診断します（脚の関節速度・\
+             振動周波数・左右差）。\r\n\
+             **足が床に触れていないことを目で確かめてから回すこと。**\r"
+        );
+        } else {
+            eprintln!("policy: GO2_TRACE_LEGS=1 — 脚の診断を出します\r");
+        }
+        crate::suspend::SuspendReport::new(default_go2)
+    });
     let mut held: PolicyTick = ctl.hold();
     let tilt_abort_rad = a.tilt_abort_deg * std::f64::consts::PI / 180.0;
     let mut faults: u32 = 0;
@@ -1058,6 +1091,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             stance,
             CONTROL_DT,
         );
+        if let Some(r) = susp.as_mut() {
+            r.update(&inp.joint_q_go2, &dq_go2, CONTROL_DT);
+        }
 
         // 50 Hz: 推論。失敗は直前の指令を保持。
         if !a.hold && k % DECIMATION == 0 {
@@ -1170,6 +1206,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 base.height_m,
                 tilt.to_degrees(),
             );
+            if let Some(r) = susp.as_ref() {
+                eprint!("\r\npolicy: {}\r", r.live_line());
+            }
             // `--hold` は**観測の符号を確かめる**ための姿勢保持なので
             // （立ち上げ手順書の手順 3: 機体を手で傾け・脚を動かす）、
             // 方策が実際に見ている生の量を出す。導出した roll/pitch だけでは
@@ -1193,6 +1232,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         k += 1;
     }
     quit.store(true, Ordering::Relaxed);
+    if let Some(r) = susp.as_ref() {
+        eprintln!();
+        r.print("policy");
+    }
 
     // ── C: 伏せへランプして脱力 ──
     if abort.is_none() {

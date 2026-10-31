@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use misa_plant_mujoco::{MujocoPlant, SimOptions};
-use misa_policy_runner::go2::{dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC};
+use misa_policy_runner::go2::{dc_motor_clip, effort_limit_isaac, GO2_TO_ISAAC, ISAAC_TO_GO2};
 use misa_policy_runner::{ObsInput, PolicyTick};
 use misa_runner::jointvec::JointVec;
 use misa_runner::misa_core::{AxisId, Command, ControlMode, Observation, Plant};
@@ -46,6 +46,35 @@ const SIM_SAFE_VX_MAX: f64 = 0.6;
 /// 受動粘性の既定 [N·m·s/rad]。Unitree 公式 MuJoCo モデルの値。
 const DEFAULT_JOINT_DAMPING: f64 = 0.1;
 const FALL_TILT_RAD: f64 = 1.0;
+/// `--suspend` のときに胴体を溶接する高さ [m]。既定姿勢で脚は胴体の
+/// 0.31 m 下、伸ばしきっても 0.45 m 下なので、0.75 m なら**どの姿勢でも
+/// 足が床に届かない**（吊り台の条件）。
+const SUSPEND_HEIGHT_M: f64 = 0.75;
+
+/// 吊り台の MJCF。胴体 `body` を**初期姿勢のまま**世界へ溶接する。
+///
+/// `relpose` は書かない — MuJoCo の weld は四元数部が全 0 のとき
+/// `qpos0` の相対姿勢を使う仕様で、それがちょうど「生成時の位置に貼る」。
+/// `relpose="0 0 0.75 1 0 0 0"` と書くと **body2(=world) の body1 系での
+/// 姿勢**という逆向きの意味になり、胴体は落ちる（実測した）。
+///
+/// **なぜ閉じて開き直すのか**: `extra_worldbody_xml` は `</worldbody>` の
+/// 直前へ逐語で差し込まれる唯一の入口で、`<equality>` は worldbody の中に
+/// 置けない。MJCF は最上位の節の繰り返しを許すので、ここで worldbody を
+/// 閉じ、equality を書き、worldbody を開き直す（生成側の `</worldbody>`
+/// が後者を閉じる）。差し込み位置が変わったら拘束が効かなくなるが、
+/// `run` が起動直後に胴体が落ちないことを実測して確かめる。
+fn suspend_mjcf(body: &str) -> String {
+    format!(
+        "\n    <!-- 吊り台（立ち上げ手順 4・5）: 胴体を世界へ溶接する -->\n\
+         </worldbody>\n\
+         <equality>\n\
+         \x20 <weld name=\"gantry\" body1=\"{body}\" \
+         solimp=\"0.9999 0.9999 0.001 0.5 2\" solref=\"0.001 1\"/>\n\
+         </equality>\n\
+         <worldbody>\n"
+    )
+}
 
 /// misa 軸 i（脚順 FL,FR,RL,RR × h/t/c）→ Isaac index（型順）。
 fn misa_to_isaac(i: usize) -> usize {
@@ -248,11 +277,18 @@ fn misa_with_overrides(
     };
     // メッシュは .misa からの相対パスで引かれるので、元と同じディレクトリに
     // 置けない場合は解決できない。そこで元ディレクトリに置き直す。
+    //
+    // **名前は内容で決まるので固定でよいが、置くのは atomic rename で行う。**
+    // 同じ上書きで `policy --sim` を並列に回すと、書きかけのファイルを隣の
+    // プロセスが読んで「missing field `schema`」で落ちる（6 本同時に回して
+    // 実際に 1 本落ちた）。同じ内容を書くのだから、別名で書いて rename すれば
+    // 読み手は常に完全なファイルだけを見る。
     let side = std::path::Path::new(misa_path)
         .parent()
         .map(|d| d.join(format!(".{stem}_{tag}.misa")));
     if let Some(side) = side {
-        if std::fs::copy(&path, &side).is_ok() {
+        let staging = side.with_extension(format!("misa.{}", std::process::id()));
+        if std::fs::copy(&path, &staging).is_ok() && std::fs::rename(&staging, &side).is_ok() {
             eprintln!("policy-sim: {note}（{} を使用）", side.display());
             return Ok(side.to_string_lossy().into_owned());
         }
@@ -281,6 +317,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             "policy-sim: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します"
         );
     }
+    if a.suspend && a.stairs.is_some() {
+        return Err(
+            "--suspend と --stairs は同時に使えません（吊っている機体は段差に触れない）"
+                .into(),
+        );
+    }
     if a.odom_calibrated && !ctl.wants_velocity() {
         return Err(
             "--odom-calibrated は脚オドメトリを入力に使う契約専用です\
@@ -298,6 +340,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     } else {
         0.40
     });
+    // 吊るときは胴体を床から離した位置で生成して、そこへ溶接する。
+    let spawn_height = if a.suspend {
+        SUSPEND_HEIGHT_M
+    } else {
+        body_height
+    };
     eprintln!(
         "policy-sim: {}（契約: {}、stride {:.2}/{:.2}, height {:.2} m）を {} で回します",
         a.model,
@@ -341,7 +389,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         actuator_kv_by_kind: None,
         torque_scale: 1.0,
         velocity_kv: 20.0,
-        base_height_m: body_height,
+        base_height_m: spawn_height,
         home,
         // 接触モデルは Python の参照プラント（go2-gait-runner の go2.xml、
         // `<option cone="elliptic" impratio="100"/>` と足 geom の
@@ -367,7 +415,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         // 階段。**接地摩擦も go2_rl のハーネスに合わせること**
         // （あちらは --foot-friction 0.8 で測っている）。既定のままだと
         // 段鼻で滑って Python 側の数字と比べられない。
-        extra_worldbody_xml: a.stairs.as_ref().map(|s| s.to_mjcf()),
+        extra_worldbody_xml: if a.suspend {
+            Some(suspend_mjcf("base"))
+        } else {
+            a.stairs.as_ref().map(|s| s.to_mjcf())
+        },
     };
     let mut plant = MujocoPlant::new(axes, &opts)?;
     let mut obs = Observation::empty(12, 4);
@@ -403,6 +455,55 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 最初の 1 tick は指令 Idle（その場保持）で回して観測を得る。
     plant.exchange(&cmd_out, &mut obs)?;
 
+    // **吊り拘束が本当に効いているかを実測で確かめる。** XML の差し込み
+    // 位置に頼った仕掛けなので、拘束が入らなかったのを黙って見逃すと
+    // 「床に落ちた機体で手順 4 を予行した」ことになる（`--hold` を sim 側で
+    // 黙って無視していたのと同じ型の失敗）。0.2 s 脱力で保持して、胴体が
+    // 動かないことと足が床から離れていることを見る。
+    if a.suspend {
+        // **確認は脱力ではなく姿勢保持で回す。** 脱力で回すと脚が垂れ、
+        // 本番ループの PD がそれを引き戻す過渡が吊り診断に混ざる
+        // （初回は hip の |dq| が 3.4 rad/s、ずれが 0.26 rad に見えた —
+        //   どちらも「吊り拘束の確認の副作用」で、方策とも実機とも無関係）。
+        let hold = ctl.hold();
+        let mut hold_cmd = Command::idle(12);
+        for i in 0..12 {
+            let isaac = misa_to_isaac(i);
+            let ax = hold_cmd.get_mut(AxisId::new(i as u16)).unwrap();
+            ax.mode = ControlMode::Impedance;
+            ax.position_rad = hold.q_des_isaac[isaac];
+            ax.velocity_rad_s = 0.0;
+            ax.kp_nm_per_rad = hold.kp_isaac[isaac];
+            ax.kd_nm_s_per_rad = hold.kd_isaac[isaac];
+            ax.torque_ff_nm = 0.0;
+        }
+        for _ in 0..(0.5 / CONTROL_DT) as u64 {
+            plant.exchange(&hold_cmd, &mut obs)?;
+        }
+        let z = plant.base_position().map(|b| b[2]).unwrap_or(0.0);
+        if (z - spawn_height).abs() > 0.01 {
+            return Err(format!(
+                "吊り拘束が効いていません（胴体が {spawn_height:.3} m から {z:.3} m へ動いた）\
+                 — misa-plant-mujoco の extra_worldbody_xml の差し込み位置が\
+                 変わった可能性があります"
+            ));
+        }
+        let lowest = plant
+            .foot_positions()
+            .iter()
+            .filter_map(|p| p.map(|p| p[2]))
+            .fold(f64::INFINITY, f64::min);
+        if lowest < 0.02 {
+            return Err(format!(
+                "足が床に届いています（最低点 {lowest:.3} m）— 吊り高さが足りません"
+            ));
+        }
+        eprintln!(
+            "policy-sim: --suspend — 胴体を {spawn_height:.2} m で世界へ溶接しました\
+             （保持姿勢での足の最低点 {lowest:.3} m）"
+        );
+    }
+
     // go2.misa は粘性ダンピング 2.0 の**悲観**プラント。ここで出せる速度は
     // 実機よりかなり低く（実測: Pure 契約は vx 0.7 まで歩き、0.8 で転倒）、
     // テレオペで W を押し続けると学習域の上限まで上がって転ぶ。--vx-max
@@ -437,6 +538,17 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
 
     ctl.reset();
     let mut odom = LegOdometry::new_with_planar_slip_calibration(a.odom_calibrated);
+    // 吊り診断（手順 4・5）。実機側と同じ関数なので数字がそのまま比べられる。
+    // 接地したままでも同じ診断を取れるようにする（起動の蹴りが吊り特有か
+    // 方策そのものかを切り分けるため）。既定は静か。
+    let trace_legs = std::env::var("GO2_TRACE_LEGS").ok().as_deref() == Some("1");
+    let mut susp = (a.suspend || trace_legs).then(|| {
+        let mut default_go2 = [0.0f64; 12];
+        for i in 0..12 {
+            default_go2[ISAAC_TO_GO2[i]] = default_isaac[i];
+        }
+        crate::suspend::SuspendReport::new(default_go2)
+    });
     let (mut stance_n_sum, mut contact_none_sum, mut stance_ticks) = (0u64, 0u64, 0u64);
     let mut fk_checked = false;
     // 脚オドメトリの診断（FK 照合・恒等式の突き合わせ）。既定は静か。
@@ -651,6 +763,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             stance,
             CONTROL_DT,
         );
+        if let Some(r) = susp.as_mut() {
+            r.update(&inp.joint_q_go2, &inp.joint_dq_go2, CONTROL_DT);
+        }
 
         // ── 50 Hz: 推論 ──
         // `--hold` のときは推論を回さず保持する。実機の手順 3（観測の符号を
@@ -866,6 +981,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 imu.rpy_rad[0].to_degrees(),
                 imu.rpy_rad[1].to_degrees(),
             );
+            if let Some(r) = susp.as_ref() {
+                eprint!("\r\npolicy-sim: {}\r", r.live_line());
+            }
             if a.hold {
                 let g_b = misa_policy_runner::support::projected_gravity(&inp.quat_wxyz);
                 let q = &inp.joint_q_go2; // Go2 SDK 順 = FR, FL, RR, RL × hip/thigh/calf
@@ -980,6 +1098,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 );
             }
         }
+    }
+    if let Some(r) = susp.as_ref() {
+        r.print("policy-sim");
     }
     match fell {
         Some(reason) => Err(format!("policy-sim: {reason}")),
