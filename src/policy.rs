@@ -746,10 +746,16 @@ const STEP_WZ: f64 = 0.10;
 const VX_PRESETS: [f64; 5] = [0.2, 0.4, 0.6, 0.8, 1.0];
 
 /// WASD テレオペ。指令は共有 cmd を書き換え、q/Esc/Ctrl-C で quit。
+///
+/// `swap` は **運転者による方策の切り替え要求**（`m` キー）。立てるだけで、
+/// 実際の入れ替えは制御ループが `hand_over` を通して行う（キーボードの
+/// スレッドから方策を触らないのは、推論と同じ tick の中で引き継がないと
+/// `last_action` と関節目標が飛ぶため）。
 pub(crate) fn spawn_keyboard(
     cmd: Arc<Mutex<[f64; 3]>>,
     quit: Arc<AtomicBool>,
     clamp: CmdClamp,
+    swap: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -764,6 +770,7 @@ pub(crate) fn spawn_keyboard(
          A/D = wz±{STEP_WZ:.2}, R/F = vy±{STEP_VY:.2}\r\n\
          \x20      1..5 = vx を {P1:.1}/{P2:.1}/{P3:.1}/{P4:.1}/{P5:.1} に即設定, \
          0 か Space = 全部 0, Esc / q = 終了（伏せて抜ける）\r\n\
+         \x20      m = 方策を 2 本目と入れ替え（--model-alt を指定したとき）\r\n\
          \x20      指令域: vx ≤ {vx_hi:.2}, |vy| ≤ {vy_hi:.2}, |wz| ≤ {wz_hi:.2}\r",
         P1 = VX_PRESETS[0],
         P2 = VX_PRESETS[1],
@@ -801,6 +808,10 @@ pub(crate) fn spawn_keyboard(
                         KeyCode::Char('r') => c[1] += STEP_VY,
                         KeyCode::Char('f') => c[1] -= STEP_VY,
                         KeyCode::Char(' ') => *c = [0.0; 3],
+                        // 方策の入れ替え要求。指令は変えない（歩いたまま替える）。
+                        KeyCode::Char('m') | KeyCode::Char('M') => {
+                            swap.store(true, Ordering::Relaxed)
+                        }
                         KeyCode::Char('q') | KeyCode::Esc => quit.store(true, Ordering::Relaxed),
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             quit.store(true, Ordering::Relaxed)
@@ -855,6 +866,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     let mut ctl = Ctl::load(&a)?;
+    // 2 本目の方策（運転者が `m` で入れ替える）。契約が同じなので ONNX の
+    // 差し替えだけで済む。段差用 ⇄ 全般用の持ち替えがこれ。
+    let mut ctl_alt = match a.model_alt.as_deref() {
+        Some(path) => {
+            let mut alt = a.clone();
+            alt.model = path.to_string();
+            alt.model_alt = None;
+            let c = Ctl::load(&alt)?;
+            eprintln!("policy: 2 本目 {path}（{}）— `m` で入れ替え", c.name());
+            Some(c)
+        }
+        None => None,
+    };
     if a.odom_calibrated && !ctl.wants_velocity() {
         return Err("--odom-calibrated は脚オドメトリを入力に使う契約専用です\
              （76 入力 Pure、または --gru-host-velocity の GRU）"
@@ -931,8 +955,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
+    let swap_req = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp.clone())?)
+        Some(spawn_keyboard(
+            cmd.clone(),
+            quit.clone(),
+            clamp.clone(),
+            swap_req.clone(),
+        )?)
     } else {
         eprintln!(
             "policy: キーボード無効。vx={:.2} vy={:.2} wz={:.2} を保持",
@@ -1046,6 +1076,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 a.cmd_yaw_accel,
                 CONTROL_DT * DECIMATION as f64,
             );
+            // 運転者が `m` を押していたら、この tick の頭で入れ替える。
+            // `hand_over` が last_action と関節目標を引き継ぐので、観測も
+            // 出力も切り替えの瞬間に連続になる（歩いたまま替えられる）。
+            if swap_req.swap(false, Ordering::Relaxed) {
+                match ctl_alt.as_mut() {
+                    Some(alt) => {
+                        hand_over(&ctl, alt)?;
+                        std::mem::swap(&mut ctl, alt);
+                        eprintln!(
+                            "policy: t={:.2}s 方策を入れ替えました -> {}\r",
+                            run_start.elapsed().as_secs_f64(),
+                            ctl.name()
+                        );
+                    }
+                    None => eprintln!(
+                        "policy: 2 本目が指定されていません（--model-alt PATH で渡す）\r"
+                    ),
+                }
+            }
             let vel_body = world_to_body(&inp.quat_wxyz, odom.vel_world());
             match ctl.tick(&inp, cmd_applied, vel_body) {
                 Ok(t) => {

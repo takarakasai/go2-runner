@@ -418,8 +418,14 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let clamp = cmd_clamp(&ctl, vx_max);
     let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
     let quit = Arc::new(AtomicBool::new(false));
+    let swap_req = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
-        Some(spawn_keyboard(cmd.clone(), quit.clone(), clamp.clone())?)
+        Some(spawn_keyboard(
+            cmd.clone(),
+            quit.clone(),
+            clamp.clone(),
+            swap_req.clone(),
+        )?)
     } else {
         None
     };
@@ -674,6 +680,19 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             // **指定時刻で 2 本目へ入れ替える**（切り替えの滑らかさの計測用）。
             // 出ていく方の last_action と保持関節目標を引き継ぐので、
             // 観測と出力が切り替えの瞬間に連続になる。
+            // `m` キーでも入れ替える（実機と同じ口。--swap-at は時刻指定の計測用）。
+            if swap_req.swap(false, Ordering::Relaxed) {
+                match ctl_alt.as_mut() {
+                    Some(alt) => {
+                        crate::policy::hand_over(&ctl, alt)?;
+                        std::mem::swap(&mut ctl, alt);
+                        eprintln!("policy-sim: 方策を入れ替えました -> {}\r", ctl.name());
+                    }
+                    None => eprintln!(
+                        "policy-sim: 2 本目が指定されていません（--model-alt PATH で渡す）\r"
+                    ),
+                }
+            }
             if !swapped {
                 if let (Some(t_swap), Some(alt)) = (a.swap_at_s, ctl_alt.as_mut()) {
                     if k as f64 * CONTROL_DT >= t_swap {

@@ -24,7 +24,7 @@
 | MuJoCo 閉ループ・平地 | 一致（立位 0.355 m、直進） |
 | MuJoCo 閉ループ・階段 | **10/15/20 cm すべて 10 段完登**（開始位置 4 通り） |
 | x86 リリースビルド | 通る（`cargo build --release --no-default-features`） |
-| aarch64 クロスビルド | **未完**。DDS（cyclonedds）の C が aarch64 の libc ヘッダを要求する。 |
+| aarch64 クロスビルド | **契約ランタイム（misa-policy-runner）は通る**（静的リンク）。**go2-runner は落ちる** — `cyclonedds-sys` の C が aarch64 の libc ヘッダを要求し、clang がホストの `/usr/include/stdint.h` を拾う（`bits/libc-header-start.h` が無い）。別 PC 構成なら不要。手段は go2_rl §95.3。 |
 
 **構成は「Go2 と ethernet で繋いだ別 PC（x86）から DDS」**を前提にする
 （README の「別 PC での立ち上げ」）。SBC 上で走らせたい場合は上の aarch64 が要る。
@@ -115,8 +115,33 @@ ONNX の差し替えだけ**で済む。
 | `go2_blind_lowflat_curb_policy.onnx`（**ZC**） | 全般・押し耐性 | 横外力 **107/109 /144**（P は 83、床 73〜94）、孤立障害 **6〜8/9**（P は 4、床 0〜5）、立位 0.307 m。階段は 20 cm × 10 段 4/4（**方位サーボ必須**） |
 | `walk_quality/E_effwalk_17848.onnx`（E） | 平地・緩い不整地 | CoT −46 %、機械出力 −38 %、遊脚 105 → 30 mm。飛び石 25 % と凹凸 140 mm では P より強い |
 
-**枠は 2 本なので 3 本から選ぶ**: 目標条件（20 cm × 10 段）を最優先なら
-**ZC + P**、長い平地の省エネを取るなら ZC + E。go2_rl §94.5。
+**枠は 2 本。採ったのは ZC + P**（go2_rl §95.1）。E は実機で平地の省エネが
+問題になってから入れ替える（ONNX の差し替えだけ）。
+
+### 既定の起動コマンド
+
+```bash
+A=/path/to/go2_rl/artifacts
+GO2_IFACE=eth0 go2-run policy \
+  --model     $A/go2_blind_lowflat_curb_policy.onnx \
+  --model-alt $A/go2_blind_stairs20_policy.onnx \
+  --heading-hold 2 0.5 --tilt-abort 65 --vx-max 0.4
+```
+
+既定が **ZC**（押し耐性・孤立障害）、**`m` キーで P**（段差）に持ち替える。
+平地の試験では `--tilt-abort` を既定（35°）に戻す。
+
+### 運転者の方策切替 — **`m` キー**（2026-10-31 実装）
+
+走行中に押すと、`last_action` と関節目標を引き継いで**歩いたまま**入れ替わる
+（引き継がないと新しい方策が「直前に何もしていない」という嘘の観測を見る）。
+切り替わると端末に `方策を入れ替えました -> ...` と出る。
+
+sim での実測（平地、ZC → P、方位サーボ ON）: 立位が **0.31 m から 0.35 m へ
+連続に移り**、転倒・観測異常なし。`m` キー自体も疑似端末で押して確認済。
+
+**注意**: 立位高さが変わるので、**段差の途中で押さない**。平地で持ち替える。
+2 本目を渡していないときは「`--model-alt PATH` で渡す」と出るだけで何も起きない。
 
 ### 使い方
 
@@ -125,7 +150,7 @@ go2-run policy --model P.onnx --model-alt E.onnx [--swap-at 8.0]
 ```
 
 `--swap-at` は **`--sim` 専用の計測用**（指定時刻に入れ替える）。
-実機では運転者が切り替える口がまだ無い（下記）。
+**実機は `m` キー**（上記）。
 
 ### 引き継ぎ — ここを間違えると分布外になる
 
