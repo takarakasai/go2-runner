@@ -1011,6 +1011,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut faults: u32 = 0;
     let mut status = Instant::now();
     let run_start = Instant::now();
+    // 観測の「古さ」の計測（go2_rl §103）。方策への要求は
+    // **推論 tick で 20 ms 未満**（1 tick）で、40 ms になると 20 cm 段差の
+    // 踏破が 332 → 281 点（−31）落ちる。**プロセス内の遅れは 0**（同じ 2 ms
+    // 周期で読み・推定・推論・送信をしている）ので、残る未知は
+    // **LowState が届く間隔と、届いた値そのものの古さ**。ここは実機でしか
+    // 測れないので、推論 tick ごとに記録して終了時に出す。
+    let mut age_hist = [0u64; 5]; // <2, <4, <10, <20, >=20 ms
+    let mut age_max_ms = 0.0f64;
+    let mut poll_new = 0u64; // 新着があった 2 ms 周期の数
+    let mut poll_total = 0u64;
+    let mut rtick_prev: Option<u32> = None;
+    let mut rtick_gap_max = 0u32; // 機体側 tick の最大の飛び
+    let mut rtick_gaps = 0u64; // 1 周期ぶんを超えた飛びの回数
     let mut abort: Option<String> = None;
     if a.hold {
         eprintln!("policy: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します\r");
@@ -1041,7 +1054,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 break;
             }
         }
-        plant.poll_state()?;
+        let got_new = plant.poll_state()?;
+        poll_total += 1;
+        if got_new {
+            poll_new += 1;
+        }
         let cmd_target = *cmd.lock().unwrap();
         let (inp, q_isaac_meas, dq_go2) = {
             let s = plant.last_state().ok_or("LowState がありません")?;
@@ -1054,8 +1071,46 @@ pub fn run(args: &[String]) -> Result<(), String> {
         };
 
         // 観測が腐ったら（バス断など）保持のまま数えて中断へ。
+        // **この 20 ms は §103 の崖のちょうど縁**（20 ms は許容の端、40 ms で
+        // 明確に落ちる）。中断の線としてはこのままにし、分布は下で記録する。
         if plant.state_age() > Duration::from_millis(20) {
             faults += 1;
+        }
+        if k % DECIMATION == 0 {
+            let ms = plant.state_age().as_secs_f64() * 1e3;
+            if ms > age_max_ms {
+                age_max_ms = ms;
+            }
+            let b = if ms < 2.0 {
+                0
+            } else if ms < 4.0 {
+                1
+            } else if ms < 10.0 {
+                2
+            } else if ms < 20.0 {
+                3
+            } else {
+                4
+            };
+            age_hist[b] += 1;
+        }
+        if got_new {
+            // 機体側の tick（LowState の uint32。単位は機体の周期）。
+            // **飛べばその分だけ観測が古い。** 届かない区間は値が据え置きに
+            // なるので、tick の飛びは「推定が更新されない時間」そのもの。
+            if let Some(s) = plant.last_state() {
+                let t = s.tick;
+                if let Some(prev) = rtick_prev {
+                    let d = t.wrapping_sub(prev);
+                    if d > 1 {
+                        rtick_gaps += 1;
+                    }
+                    if d > rtick_gap_max {
+                        rtick_gap_max = d;
+                    }
+                }
+                rtick_prev = Some(t);
+            }
         }
 
         // 傾きの即時脱力（projected gravity の z から）。
@@ -1235,6 +1290,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if let Some(r) = susp.as_ref() {
         eprintln!();
         r.print("policy");
+    }
+
+    // 観測の古さの要約（go2_rl §103 の要求に対して読む）。
+    let n_age: u64 = age_hist.iter().sum();
+    if n_age > 0 {
+        eprintln!(
+            "\npolicy: 観測の古さ（推論 {n_age} tick）: <2ms {} / <4ms {} / <10ms {} \
+             / <20ms {} / >=20ms {}（最大 {:.1} ms）",
+            age_hist[0], age_hist[1], age_hist[2], age_hist[3], age_hist[4], age_max_ms
+        );
+        eprintln!(
+            "policy: LowState 新着 {poll_new}/{poll_total} 周期（{:.0} Hz 相当）、\
+             機体 tick の飛び {rtick_gaps} 回・最大 {rtick_gap_max}",
+            poll_new as f64 / (poll_total as f64 * CONTROL_DT).max(1e-9)
+        );
+        eprintln!(
+            "policy: 要求（§103）= 推論 tick の古さが **20 ms 未満**（目標 4 ms 未満）。\
+             40 ms 相当になると 20 cm 段差が −31 点。平滑化・雑音・欠測 30 %・\
+             倍率 ±10 % は無害なので、見るのはここだけでよい"
+        );
     }
 
     // ── C: 伏せへランプして脱力 ──
