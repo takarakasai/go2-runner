@@ -167,6 +167,31 @@ impl StairsSpec {
         }
         s
     }
+
+    /// 胴体の真下にある地形の高さ [m]。`to_mjcf` が出す箱と**同じ面**を返す。
+    ///
+    /// **なぜ要るか**: go2_rl の sim2sim は登坂の進捗を
+    /// `max_terrain_under_base_m`（胴体真下の地形の最高高さ、姿勢が 45° 未満の
+    /// 間だけ）で測っている。ランタイム側を同じ物差しで採点しないと、
+    /// 「sim2sim の 423/432 がランタイムでも出るか」を比べられない。
+    /// 箱は軸平行なので、面は閉じた形で書ける（MuJoCo に問い合わせない）。
+    pub fn height_at(&self, x: f64, y: f64) -> f64 {
+        if y.abs() > self.width_m * 0.5 {
+            return 0.0;
+        }
+        let last_edge = self.start_x_m + self.steps as f64 * self.run_m;
+        if self.top_platform_m > 0.0
+            && x >= last_edge
+            && x <= last_edge + self.top_platform_m
+        {
+            return self.steps as f64 * self.rise_m;
+        }
+        if x < self.start_x_m || x >= last_edge {
+            return 0.0;
+        }
+        let n = ((x - self.start_x_m) / self.run_m).floor() as usize + 1;
+        n.min(self.steps) as f64 * self.rise_m
+    }
 }
 
 fn self_checked(s: StairsSpec) -> StairsSpec {
@@ -220,6 +245,33 @@ mod tests {
         assert!(x.contains("0.3000\" size=\"0.1500 1.5000 0.3000\""), "{x}");
         // 1 段目の x: start 1.0 + 半長 0.15 = 1.15
         assert!(x.contains("pos=\"1.1500 0 0.1000\""), "{x}");
+    }
+
+    /// `height_at` は `to_mjcf` が出す階段と同じ面を返す。
+    /// go2_rl の `tgt_stairs_200_s120.xml`（蹴上げ 0.20 × 10 段、踏面 0.30、
+    /// 開始 x 1.2、天端 1.2+3.0=4.2 から）と同じ値であることを確かめる。
+    #[test]
+    fn height_at_matches_the_staircase_surface() {
+        let s = StairsSpec { rise_m: 0.2, steps: 10, run_m: 0.3, width_m: 3.0,
+                             start_x_m: 1.2, friction: 0.8, top_platform_m: 1.0 };
+        assert_eq!(s.height_at(0.0, 0.0), 0.0);       // 助走路
+        assert_eq!(s.height_at(1.19, 0.0), 0.0);      // 1 段目の直前
+        assert!((s.height_at(1.21, 0.0) - 0.2).abs() < 1e-12);   // 1 段目
+        assert!((s.height_at(1.49, 0.0) - 0.2).abs() < 1e-12);
+        assert!((s.height_at(1.51, 0.0) - 0.4).abs() < 1e-12);   // 2 段目
+        assert!((s.height_at(4.19, 0.0) - 2.0).abs() < 1e-12);   // 10 段目
+        assert!((s.height_at(4.50, 0.0) - 2.0).abs() < 1e-12);   // 天端の踏み場
+        assert_eq!(s.height_at(5.30, 0.0), 0.0);      // 踏み場の先は何も無い
+        assert_eq!(s.height_at(2.0, 1.6), 0.0);       // 幅の外
+    }
+
+    /// 天端の踏み場が無い指定では、最上段の先はすぐ 0 に落ちる。
+    #[test]
+    fn height_at_without_a_top_platform_drops_off() {
+        let s = StairsSpec { rise_m: 0.2, steps: 2, run_m: 0.3, width_m: 1.0,
+                             start_x_m: 0.0, friction: 0.8, top_platform_m: 0.0 };
+        assert!((s.height_at(0.5, 0.0) - 0.4).abs() < 1e-12);
+        assert_eq!(s.height_at(0.61, 0.0), 0.0);
     }
 
     /// 段は x 方向に踏面ぶんずつ前へ出る。

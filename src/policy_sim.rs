@@ -599,6 +599,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     let mut z_max = f64::NEG_INFINITY;
     let mut roll_abs_max = 0.0f64;
     let mut pitch_abs_max = 0.0f64;
+    // 登坂の進捗。go2_rl の sim2sim と**同じ物差し**
+    // （胴体の真下にある地形の最高高さ。姿勢が 45° 以上寝ている間は数えない）。
+    let mut max_terrain_under = 0.0f64;
 
     let mut k: u64 = 0;
     while !quit.load(Ordering::Relaxed) {
@@ -633,6 +636,18 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
         z_max = z_max.max(base[2]);
         roll_abs_max = roll_abs_max.max(imu.rpy_rad[0].abs());
         pitch_abs_max = pitch_abs_max.max(imu.rpy_rad[1].abs());
+        if let Some(st) = a.stairs.as_ref() {
+            // 投影重力の z 成分から傾き。sim2sim 側の
+            // `acos(-projected_gravity_b[2]) < 45°` と同式。
+            let g = misa_policy_runner::support::quat_rotate_inverse(
+                &inp.quat_wxyz,
+                [0.0, 0.0, -1.0],
+            );
+            let tilt = (-g[2]).clamp(-1.0, 1.0).acos();
+            if tilt < std::f64::consts::FRAC_PI_4 {
+                max_terrain_under = max_terrain_under.max(st.height_at(base[0], base[1]));
+            }
+        }
         if base[2] < FALL_HEIGHT_M
             || imu.rpy_rad[0].abs() > FALL_TILT_RAD
             || imu.rpy_rad[1].abs() > FALL_TILT_RAD
@@ -1068,6 +1083,15 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 fed[1] - vy_truth_sum / vx_n as f64,
             );
         }
+    }
+    if let Some(st) = a.stairs.as_ref() {
+        // go2_rl の採点規則（`steps_of`）と同じ: 地形高さ ÷ 蹴上げ。
+        eprintln!(
+            "policy-sim: 段差 胴体下の最高地形 {:.3} m = {:.2} 段 / {} 段",
+            max_terrain_under,
+            max_terrain_under / st.rise_m,
+            st.steps,
+        );
     }
     eprintln!(
         "policy-sim: 姿勢範囲 |roll|max {:.2}° / |pitch|max {:.2}° / z [{:.3}, {:.3}] m",
