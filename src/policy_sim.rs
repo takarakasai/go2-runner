@@ -263,8 +263,14 @@ fn misa_with_overrides(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("model");
+    // **自分だけの名前へ書く。** 下の side と同じ理由で、共有の名前へ直に
+    // 書くと並列実行で書きかけを隣のプロセスが読む。`std::fs::write` は
+    // atomic ではないので、/tmp 側も「PID 付きで書いて rename」にする
+    // （§108 の最初の掃引で 432 本中 4 本が
+    //  `invalid string / collision_enabled = f` で落ちた）。
     let path = std::env::temp_dir().join(format!("{stem}_{tag}.misa"));
-    std::fs::write(&path, out).map_err(|e| format!("一時 .misa を書けません: {e}"))?;
+    let own = std::env::temp_dir().join(format!(".{stem}_{tag}.misa.{}", std::process::id()));
+    std::fs::write(&own, out).map_err(|e| format!("一時 .misa を書けません: {e}"))?;
     let note = match friction {
         Some(mu) => format!(
             "受動粘性を {damping} N·m·s/rad（{joints} 関節）、\
@@ -289,11 +295,14 @@ fn misa_with_overrides(
         .map(|d| d.join(format!(".{stem}_{tag}.misa")));
     if let Some(side) = side {
         let staging = side.with_extension(format!("misa.{}", std::process::id()));
-        if std::fs::copy(&path, &staging).is_ok() && std::fs::rename(&staging, &side).is_ok() {
+        if std::fs::copy(&own, &staging).is_ok() && std::fs::rename(&staging, &side).is_ok() {
+            let _ = std::fs::remove_file(&own);
             eprintln!("policy-sim: {note}（{} を使用）", side.display());
             return Ok(side.to_string_lossy().into_owned());
         }
     }
+    // side が使えないときだけ /tmp を使う。ここも rename で公開する。
+    std::fs::rename(&own, &path).map_err(|e| format!("一時 .misa を置けません: {e}"))?;
     eprintln!("policy-sim: {note}");
     Ok(path.to_string_lossy().into_owned())
 }
