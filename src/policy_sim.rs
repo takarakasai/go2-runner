@@ -33,6 +33,7 @@ use crate::estimator::LegOdometry;
 use crate::go2_plant::{go2_axes, MISA_TO_GO2};
 use crate::policy::{
     cmd_clamp, rate_limit_cmd, spawn_keyboard, world_to_body, yaw_from_quat_wxyz, Args, Ctl,
+    Dither,
     HeadingServo,
 };
 
@@ -566,6 +567,7 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     }
     // 学習側と同じレートで指令を立ち上げる（--cmd-accel 0 で無効）。
     let mut cmd_applied = [0.0f64; 3];
+    let mut dither = Dither::new(a.odom_dither_seed);
     let mut servo = a.heading_hold.map(|(kp, ki)| HeadingServo::new(kp, ki));
     if let Some(sv) = &servo {
         eprintln!(
@@ -785,7 +787,11 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             } else {
                 odom.vel_world()
             };
-            let vel_body = world_to_body(&inp.quat_wxyz, vel_world);
+            // 実機ループと同じ注入点・同じ生成器（§104/§106）。
+            let vel_body = dither.apply(
+                a.odom_dither,
+                world_to_body(&inp.quat_wxyz, vel_world),
+            );
             let servo_target = match servo.as_mut() {
                 Some(sv) => sv.apply(
                     yaw_from_quat_wxyz(&inp.quat_wxyz),

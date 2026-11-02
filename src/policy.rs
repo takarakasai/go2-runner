@@ -182,6 +182,76 @@ pub(crate) struct Args {
     /// 変えない。go2_rl/doc/gru_straightness_heading_servo_20260921.md: 親 GRU の
     /// 横流れが 1.0 m/s で −9.5 → −0.2 m、速度・姿勢の代償なし。推奨 2.0 0.5。
     pub heading_hold: Option<(f64, f64)>,
+    /// 観測の胴体速度 3 要素へ足す白色雑音の σ [m/s]（0 = 入れない）。
+    ///
+    /// **これは劣化ではなく性能を上げるディザ**。go2_rl §104/§106 で測った:
+    /// 20 cm × 10 段が 432 点満点で 392 → **423**（床 390〜395 の外）。
+    /// 平地の速度追従・不整地・押し 2 面・下り・真の坂では床の中（損なし）。
+    /// **代償は電力のみ**（輸送コスト CoT が 4 種のうち 3 種で +0.6〜1.1 %）。
+    /// 推奨 0.05。**観測にだけ足す**（支持脚レンチの `vel_world` には触れない）
+    /// — go2_rl `sim2sim_mit_go2_mujoco.py --odom-noise` と同じ注入点。
+    pub odom_dither: f64,
+    /// ディザの乱数の種。既定を固定にして走行を再現可能にする。
+    pub odom_dither_seed: u64,
+}
+
+/// ディザ用の正規乱数。**外部クレートを足さない**（aarch64 のクロスビルドは
+/// cyclonedds だけが壁なので、依存を増やさない方針。go2_rl の記憶参照）。
+/// xorshift64* + Box–Muller。2 本のうち 1 本を貯めて交互に返す。
+pub(crate) struct Dither {
+    state: u64,
+    spare: Option<f64>,
+}
+
+impl Dither {
+    pub(crate) fn new(seed: u64) -> Self {
+        // 種 0 は xorshift が 0 に固定されるので避ける。
+        Self {
+            state: if seed == 0 { 0x9E3779B97F4A7C15 } else { seed },
+            spare: None,
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// (0, 1) の一様乱数。0 を返さない（ln(0) を避ける）。
+    fn next_unit(&mut self) -> f64 {
+        // 53 bit を使い、1..=2^53-1 に写す。
+        let bits = self.next_u64() >> 11;
+        (bits as f64 + 1.0) / ((1u64 << 53) as f64 + 1.0)
+    }
+
+    /// 標準正規を 1 つ返す。
+    pub(crate) fn normal(&mut self) -> f64 {
+        if let Some(v) = self.spare.take() {
+            return v;
+        }
+        let u1 = self.next_unit();
+        let u2 = self.next_unit();
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = 2.0 * std::f64::consts::PI * u2;
+        self.spare = Some(r * theta.sin());
+        r * theta.cos()
+    }
+
+    /// 胴体速度 3 要素へ σ の白色雑音を足す。σ <= 0 なら素通し。
+    pub(crate) fn apply(&mut self, sigma: f64, v: [f64; 3]) -> [f64; 3] {
+        if !(sigma > 0.0) {
+            return v;
+        }
+        [
+            v[0] + sigma * self.normal(),
+            v[1] + sigma * self.normal(),
+            v[2] + sigma * self.normal(),
+        ]
+    }
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -219,6 +289,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         cmd_yaw_accel: 0.7,
         heading_hold: None,
         suspend: false,
+        odom_dither: 0.0,
+        odom_dither_seed: 20261103,
     };
     fn val(it: &mut std::slice::Iter<'_, String>, name: &str) -> Result<f64, String> {
         it.next()
@@ -308,6 +380,20 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     return Err("--heading-hold KP KI は非負で、少なくとも一方が正".into());
                 }
                 out.heading_hold = Some((kp, ki));
+            }
+            "--odom-dither" => {
+                let s = val(&mut it, "--odom-dither SIGMA")?;
+                if !(s >= 0.0) {
+                    return Err("--odom-dither SIGMA は非負（0 = 入れない）".into());
+                }
+                out.odom_dither = s;
+            }
+            "--odom-dither-seed" => {
+                out.odom_dither_seed = it
+                    .next()
+                    .ok_or("--odom-dither-seed に値がありません")?
+                    .parse()
+                    .map_err(|e| format!("--odom-dither-seed: {e}"))?;
             }
             "--impratio" => out.impratio = Some(val(&mut it, "--impratio")?),
             "--cone" => out.cone = Some(it.next().ok_or("--cone に値がありません")?.clone()),
@@ -1033,7 +1119,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     // 指令は 0 から学習時と同じレートで立ち上げる（--cmd-accel 0 で無効）。
     let mut cmd_applied = [0.0f64; 3];
-    let mut servo = a.heading_hold.map(|(kp, ki)| HeadingServo::new(kp, ki));
+let mut dither = Dither::new(a.odom_dither_seed);
+        let mut servo = a.heading_hold.map(|(kp, ki)| HeadingServo::new(kp, ki));
     if let Some(sv) = &servo {
         eprintln!(
             "policy: 方位保持 ON（KP {:.2} KI {:.2}、補正 ±{:.2} rad/s、直進指令のみ）\r",
@@ -1186,7 +1273,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     ),
                 }
             }
-            let vel_body = world_to_body(&inp.quat_wxyz, odom.vel_world());
+            // **観測にだけディザを足す**（§104/§106）。支持脚レンチが使う
+            // `base.vel_world` には触れない — sim2sim の注入点と同じ量。
+            let vel_body = dither.apply(
+                a.odom_dither,
+                world_to_body(&inp.quat_wxyz, odom.vel_world()),
+            );
             match ctl.tick(&inp, cmd_applied, vel_body) {
                 Ok(t) => {
                     if t.anomalies.is_empty() {
@@ -1339,6 +1431,115 @@ pub fn run(args: &[String]) -> Result<(), String> {
     match abort {
         Some(reason) => Err(format!("policy: {reason}")),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod dither_tests {
+    use super::*;
+
+    /// σ = 0 は**素通し**。配備で既定が off なので、bit 単位で変わらないこと。
+    #[test]
+    fn sigma_zero_is_bit_identical() {
+        let mut d = Dither::new(1);
+        let v = [0.123_456_789, -0.5, 1e-9];
+        assert_eq!(d.apply(0.0, v), v);
+        assert_eq!(d.apply(-1.0, v), v); // 負は素通し（parse で弾くが二重に守る）
+    }
+
+    /// 同じ種なら同じ列（走行を再現できる）。別の種なら別の列。
+    #[test]
+    fn stream_is_deterministic_per_seed() {
+        let a: Vec<f64> = (0..8).map(|_| Dither::new(7).normal()).collect();
+        assert!(a.iter().all(|x| (*x - a[0]).abs() < 1e-15));
+        let mut d1 = Dither::new(7);
+        let mut d2 = Dither::new(7);
+        let mut d3 = Dither::new(8);
+        let s1: Vec<f64> = (0..16).map(|_| d1.normal()).collect();
+        let s2: Vec<f64> = (0..16).map(|_| d2.normal()).collect();
+        let s3: Vec<f64> = (0..16).map(|_| d3.normal()).collect();
+        assert_eq!(s1, s2);
+        assert_ne!(s1, s3);
+    }
+
+    /// 種 0 でも 0 に固定されない（xorshift の退化を避けている）。
+    #[test]
+    fn seed_zero_is_not_degenerate() {
+        let mut d = Dither::new(0);
+        let v: Vec<f64> = (0..4).map(|_| d.normal()).collect();
+        assert!(v.iter().any(|x| x.abs() > 1e-6), "{v:?}");
+    }
+
+    /// 平均 0・σ 1 になっていること（§106 で測ったのは白色雑音なので、
+    /// 分布が合っていなければ sim の結果は移らない）。
+    #[test]
+    fn normal_has_unit_mean_and_variance() {
+        let mut d = Dither::new(20261103);
+        let n = 200_000;
+        let mut sum = 0.0;
+        let mut sq = 0.0;
+        for _ in 0..n {
+            let x = d.normal();
+            sum += x;
+            sq += x * x;
+        }
+        let mean = sum / n as f64;
+        let var = sq / n as f64 - mean * mean;
+        assert!(mean.abs() < 0.01, "平均 {mean}");
+        assert!((var - 1.0).abs() < 0.02, "分散 {var}");
+    }
+
+    /// σ をかけた大きさが出ていること、かつ 3 要素が独立に動くこと。
+    #[test]
+    fn apply_scales_by_sigma_and_moves_all_three() {
+        let mut d = Dither::new(42);
+        let n = 100_000;
+        let mut sq = [0.0f64; 3];
+        for _ in 0..n {
+            let v = d.apply(0.05, [0.0; 3]);
+            for k in 0..3 {
+                sq[k] += v[k] * v[k];
+            }
+        }
+        for k in 0..3 {
+            let sd = (sq[k] / n as f64).sqrt();
+            assert!((sd - 0.05).abs() < 0.002, "要素 {k} の σ {sd}");
+        }
+        // 同じ tick の 3 要素が同一値ではない（1 つ引いて 3 つに使っていない）
+        let v = Dither::new(5).apply(0.05, [0.0; 3]);
+        assert!(v[0] != v[1] && v[1] != v[2], "{v:?}");
+    }
+
+    #[test]
+    fn dither_flag_parses_and_validates() {
+        let base = ["--model", "p.onnx"];
+        let ok: Vec<String> = base
+            .iter()
+            .chain(["--odom-dither", "0.05"].iter())
+            .map(|s| s.to_string())
+            .collect();
+        let a = parse(&ok).unwrap();
+        assert_eq!(a.odom_dither, 0.05);
+        assert_eq!(a.odom_dither_seed, 20261103); // 既定は固定（再現可能）
+
+        // 既定は off（配備の既定を変えない）
+        let off: Vec<String> = base.iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse(&off).unwrap().odom_dither, 0.0);
+
+        // 負は弾く
+        let bad: Vec<String> = base
+            .iter()
+            .chain(["--odom-dither", "-0.01"].iter())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse(&bad).is_err());
+
+        let seeded: Vec<String> = base
+            .iter()
+            .chain(["--odom-dither", "0.05", "--odom-dither-seed", "99"].iter())
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse(&seeded).unwrap().odom_dither_seed, 99);
     }
 }
 
