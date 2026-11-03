@@ -611,6 +611,9 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
     // 登坂の進捗。go2_rl の sim2sim と**同じ物差し**
     // （胴体の真下にある地形の最高高さ。姿勢が 45° 以上寝ている間は数えない）。
     let mut max_terrain_under = 0.0f64;
+    // 同じ量をゲート無しでも取る。段が急になるほど姿勢ゲートが効くので、
+    // 「登れていない」のか「寝ていて数えてもらえない」のかを切り分ける（§110）。
+    let mut max_terrain_raw = 0.0f64;
 
     let mut k: u64 = 0;
     while !quit.load(Ordering::Relaxed) {
@@ -653,8 +656,10 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
                 [0.0, 0.0, -1.0],
             );
             let tilt = (-g[2]).clamp(-1.0, 1.0).acos();
+            let h = st.height_at(base[0], base[1]);
+            max_terrain_raw = max_terrain_raw.max(h);
             if tilt < std::f64::consts::FRAC_PI_4 {
-                max_terrain_under = max_terrain_under.max(st.height_at(base[0], base[1]));
+                max_terrain_under = max_terrain_under.max(h);
             }
         }
         if base[2] < FALL_HEIGHT_M
@@ -1100,6 +1105,12 @@ pub(crate) fn run(a: &Args) -> Result<(), String> {
             max_terrain_under,
             max_terrain_under / st.rise_m,
             st.steps,
+        );
+        // 参考。採点には使わない（§110 でゲートの効きを見るため）。
+        eprintln!(
+            "policy-sim: 段差 参考 ゲート無しの最高地形 {:.3} m = {:.2} 段",
+            max_terrain_raw,
+            max_terrain_raw / st.rise_m,
         );
     }
     eprintln!(
