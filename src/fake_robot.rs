@@ -60,6 +60,10 @@ struct Args {
     freeze: bool,
     drop_after_s: f64,
     bad_crc: bool,
+    /// 死んだ関節（Go2 SDK 順 0〜11）。指令に従わず `lost` を数え上げる。
+    dead_joint: Option<usize>,
+    /// 足裏力センサが常に 0（接地判定が死ぬ）。
+    no_foot_force: bool,
 }
 
 impl Default for Args {
@@ -75,6 +79,8 @@ impl Default for Args {
             freeze: false,
             drop_after_s: 0.0,
             bad_crc: false,
+            dead_joint: None,
+            no_foot_force: false,
         }
     }
 }
@@ -92,7 +98,16 @@ go2-fake-robot — DDS の線の上で Go2 の役をする（実機なしで手�
                       （**12 関節の並びの検査**。FR(0.01,0.02,0.03) FL(0.04..) と出るはず）
   --freeze            lowcmd を無視して伏せ姿勢を流し続ける
   --drop-after <s>    これだけ経ったら**発行をやめる**（途切れたときの振る舞いを見る）
-  --bad-crc           lowstate の CRC を壊して流す（受け側が見ているかの確認）
+  --bad-crc           lowstate の CRC を壊して流す（**受け側は見られない** —— 詰め物
+                      130 バイトが CDR の線に載らないため。go2_rl §119 E.2）
+
+機体の病（**実機で起きたら手順書のどこを見るか**を事前に決めるための予行）:
+  --dead-joint <0-11> 関節 1 本が指令に従わない（Go2 SDK 順）。`lost` を数え上げ、
+                      `mode` を 0 にする。**左右対称の診断に出るか**を見る
+  --no-foot-force     足裏力を常に 0 にする（接地判定が死ぬ）。手順書が
+                      「実機で最初に疑うところ」と名指ししている箇所
+  --rate 200          lowstate の周期を落とす（既定 500）。古さの見張りの効き方
+
   -h, --help          これ
 
 **実機の模型ではない。** ここで出る数字は実機について何も言わない。
@@ -153,6 +168,20 @@ fn parse() -> Result<Args, String> {
             }
             "--bad-crc" => {
                 a.bad_crc = true;
+                i += 1;
+            }
+            "--dead-joint" => {
+                let v: usize = need(i, &argv, k)?
+                    .parse()
+                    .map_err(|e| format!("--dead-joint: {e}"))?;
+                if v >= 12 {
+                    return Err("--dead-joint は 0〜11（Go2 SDK 順）".into());
+                }
+                a.dead_joint = Some(v);
+                i += 2;
+            }
+            "--no-foot-force" => {
+                a.no_foot_force = true;
                 i += 1;
             }
             "--layout" => {
@@ -264,6 +293,19 @@ fn run(a: &Args) -> Result<(), String> {
     if a.bad_crc {
         eprintln!("  --bad-crc: lowstate の CRC を壊して流します");
     }
+    if let Some(g) = a.dead_joint {
+        const NAME: [&str; 12] = [
+            "FR_hip", "FR_thigh", "FR_calf", "FL_hip", "FL_thigh", "FL_calf",
+            "RR_hip", "RR_thigh", "RR_calf", "RL_hip", "RL_thigh", "RL_calf",
+        ];
+        eprintln!(
+            "  --dead-joint {g}（{}）: 指令に従わず `lost` を数え上げ、`mode` を 0 にします",
+            NAME[g]
+        );
+    }
+    if a.no_foot_force {
+        eprintln!("  --no-foot-force: 足裏力を常に 0 にします（接地判定が死ぬ）");
+    }
     eprintln!("  **実機の模型ではありません。** 数字は実機について何も言いません。");
 
     let mut q = if a.fingerprint {
@@ -326,6 +368,10 @@ fn run(a: &Args) -> Result<(), String> {
             // kp = 0（脱力）のときは追わない。実機も追わない。
             let gate = if last_kp > 0.0 { 1.0 } else { 0.0 };
             for g in 0..12 {
+                if a.dead_joint == Some(g) {
+                    dq[g] = 0.0; // 死んだ関節は動かない（q はそのまま）
+                    continue;
+                }
                 let step = gate * alpha * (q_des[g] - q[g]);
                 q[g] += step;
                 dq[g] = step / dt;
@@ -360,10 +406,18 @@ fn run(a: &Args) -> Result<(), String> {
                 m.q_raw = m.q;
                 m.dq_raw = m.dq;
                 m.temperature = 30;
+                if a.dead_joint == Some(g) {
+                    m.mode = 0; // servo を抜けた
+                    m.lost = tick as u32;
+                }
             }
             // 接地判定のしきい値は 20（`go2_plant.rs` の CONTACT_THRESHOLD）。
             // 4 脚すべて接地している体にする。
-            s.foot_force = [120, 120, 120, 120];
+            s.foot_force = if a.no_foot_force {
+                [0, 0, 0, 0]
+            } else {
+                [120, 120, 120, 120]
+            };
             s.foot_force_est = s.foot_force;
             s.bms_state.soc = 80;
             s.power_v = 29.0;

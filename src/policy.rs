@@ -106,6 +106,21 @@ const STALE_WARN_MS_DEFAULT: f64 = 100.0;
 /// **射程は方策の輪だけ** —— 段 A（既定姿勢へのランプ）と段 C（伏せ）は
 /// 設計上もともと開ループなので見ていない。
 const STALE_ABORT_MS_DEFAULT: f64 = 500.0;
+/// 4 脚とも非接地がこの時間続いたら 1 回だけ警告する [ms]。0 で無効。
+///
+/// **なぜ要るか**（go2_rl §119 E.4）。手順書は速度推定器を「実機で最初に
+/// 疑うところ」と名指ししているのに、**壊れても誰も言わなかった**。
+/// 盲目段差の契約は歩容計画を持たないので接地マスクを**足裏力センサ**から
+/// 作る。センサが死ぬ（常に 0）と接地脚が無くなり、脚オドメトリは
+/// **恒等的に 0** を出す —— 劣化ではなく 0。観測 48 には胴体速度が
+/// 入っているので、**歩いている間ずっと「止まっている」と方策に教える**。
+/// 予行で実測（`go2-fake-robot --no-foot-force`）: `v=(+0.00,+0.00)` が
+/// 最後まで並ぶだけで、警告も中断も出なかった。
+///
+/// **警告だけで中断はしない。** 4 脚非接地は転倒中にも起きるし、行動の
+/// 選択（脱力か保持か）は運転者の判断。ここは**黙らせないことだけ**が仕事。
+/// 300 ms にしたのは、0.3 m/s で歩く 4 足が 4 脚とも浮く時間ではないから。
+const NO_CONTACT_WARN_MS_DEFAULT: f64 = 300.0;
 
 #[derive(Clone)]
 pub(crate) struct Args {
@@ -142,6 +157,9 @@ pub(crate) struct Args {
     /// 観測が古いまま続いたら脱力して中断する [ms]。0 で無効。
     /// 詳細は [`STALE_ABORT_MS_DEFAULT`]。
     pub stale_abort_ms: f64,
+    /// 4 脚とも非接地が続いたら 1 回だけ警告する [ms]。0 で無効。
+    /// 詳細は [`NO_CONTACT_WARN_MS_DEFAULT`]。
+    pub no_contact_warn_ms: f64,
     /// 2 本目の方策（同じ契約）。用途で切り替えるために持つ。
     ///
     /// **なぜ 2 本持つか**: 段差用（P）と平地省エネ用（E）は**原理的に
@@ -308,6 +326,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         tilt_abort_deg: TILT_ABORT_DEG_DEFAULT,
         stale_warn_ms: STALE_WARN_MS_DEFAULT,
         stale_abort_ms: STALE_ABORT_MS_DEFAULT,
+        no_contact_warn_ms: NO_CONTACT_WARN_MS_DEFAULT,
         effort_limit: None,
         stairs: None,
         joint_damping: None,
@@ -399,6 +418,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     return Err("--state-stale-abort-ms は 0 以上（0 で無効）".into());
                 }
                 out.stale_abort_ms = v;
+            }
+            "--no-contact-warn-ms" => {
+                let v: f64 = val(&mut it, "--no-contact-warn-ms")?;
+                if v < 0.0 {
+                    return Err("--no-contact-warn-ms は 0 以上（0 で無効）".into());
+                }
+                out.no_contact_warn_ms = v;
             }
             "--effort-limit" => out.effort_limit = Some(val(&mut it, "--effort-limit")?),
             "--stairs" => {
@@ -1161,6 +1187,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // 吐かないための掛け金で、新着が戻ると外れる。
     let mut stale_warned = false;
     let mut stale_episodes: u64 = 0;
+    // 接地の見張り（§119 E.4）。**警告と記録だけ**で中断はしない。
+    let mut nc_ticks: u64 = 0; // 4 脚とも非接地だった 2 ms 周期
+    let mut nc_run: u64 = 0; // いま何周期続いているか
+    let mut nc_run_max: u64 = 0;
+    let mut nc_episodes: u64 = 0;
+    let mut nc_warned = false;
     if a.hold {
         eprintln!("policy: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します\r");
     } else {
@@ -1305,6 +1337,36 @@ let mut dither = Dither::new(a.odom_dither_seed);
                 })
             }
         };
+        // **接地の見張り**（§119 E.4）。`stance` ではなく**生の足裏力**を見る
+        // —— 歩容計画を持つ契約は `ctl.swing()` から接地マスクを作るので、
+        // センサが死んでいても `stance` には出ない。壊れているのはセンサ。
+        if let Some(st) = plant.last_state() {
+            let none_down = (0..4)
+                .all(|leg| (st.foot_force[MISA_LEG_TO_GO2_FOOT[leg]] as f64) <= CONTACT_THRESHOLD);
+            if none_down {
+                nc_ticks += 1;
+                nc_run += 1;
+                if nc_run > nc_run_max {
+                    nc_run_max = nc_run;
+                }
+                let ms = nc_run as f64 * CONTROL_DT * 1e3;
+                if a.no_contact_warn_ms > 0.0 && !nc_warned && ms >= a.no_contact_warn_ms {
+                    nc_warned = true;
+                    nc_episodes += 1;
+                    eprintln!(
+                        "policy: **4 脚とも非接地が {ms:.0} ms 続いています**（足裏力 {:?}、しきい値 {CONTACT_THRESHOLD:.0}）\r",
+                        st.foot_force
+                    );
+                    eprintln!(
+                        "policy:   **脚オドメトリは恒等的に 0 を出し、観測の胴体速度が\
+                         ずっと 0 になる**（§119 E.4）。中断はしない\r"
+                    );
+                }
+            } else {
+                nc_run = 0;
+                nc_warned = false;
+            }
+        }
         odom.update(
             &inp.quat_wxyz,
             inp.gyro_rad_s,
@@ -1491,6 +1553,19 @@ let mut dither = Dither::new(a.odom_dither_seed);
             "policy: 古さの見張り（§119 E.1）: 警告 {:.0} ms / 中止 {:.0} ms、\
              古いまま続いた事象 {stale_episodes} 回",
             a.stale_warn_ms, a.stale_abort_ms
+        );
+        // **この 2 行は別の問いに答える。** 上のヒストグラムは「推論 tick で
+        // 観測がどれだけ古かったか」= §103 の要求そのもので、**50 Hz で
+        // しか標本を取らない**。lowstate の周期が推論周期の約数だと位相が
+        // 噛み合って**最良の位相しか見ない**（予行の実測: lowstate 100 Hz で
+        // 最大 0.0 ms と出た。線は明らかに劣化している）。
+        // **線の健康は `LowState 新着 M/N` と Hz で読む。**
+        eprintln!(
+            "policy: 接地（§119 E.4）: 4 脚とも非接地 {nc_ticks}/{poll_total} 周期\
+             （{:.1} %）、最長 {:.0} ms、警告 {nc_episodes} 回。\
+             **非接地が長いなら足裏力センサを疑う**（脚オドメトリが恒等的に 0 になる）",
+            100.0 * nc_ticks as f64 / (poll_total as f64).max(1.0),
+            nc_run_max as f64 * CONTROL_DT * 1e3
         );
     }
 
