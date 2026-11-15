@@ -977,7 +977,9 @@ pub(crate) fn spawn_keyboard(
         "policy: keys — W/S = vx±{STEP_VX:.2}（Shift で ±{STEP_VX_COARSE:.1}）, \
          A/D = wz±{STEP_WZ:.2}, R/F = vy±{STEP_VY:.2}\r\n\
          \x20      1..5 = vx を {P1:.1}/{P2:.1}/{P3:.1}/{P4:.1}/{P5:.1} に即設定, \
-         0 か Space = 全部 0, Esc / q = 終了（伏せて抜ける）\r\n\
+         0 か Space = 全部 0\r\n\
+         \x20      **Esc / q / Ctrl-C = 終了**（伏せて抜ける。**もう一度 \
+         Ctrl-C で伏せを飛ばして即脱力**）\r\n\
          \x20      m = 方策を 2 本目と入れ替え（--model-alt を指定したとき）\r\n\
          \x20      指令域: vx ≤ {vx_hi:.2}, |vy| ≤ {vy_hi:.2}, |wz| ≤ {wz_hi:.2}\r",
         P1 = VX_PRESETS[0],
@@ -1032,6 +1034,45 @@ pub(crate) fn spawn_keyboard(
         }
         let _ = disable_raw_mode();
     }))
+}
+
+/// 緊急停止の信号（SIGINT / SIGTERM / SIGHUP）を `quit` に繋ぐ。
+///
+/// **塞いだ穴**（2026-11-15 の手順書監査 A1）。キーボード有効のときは
+/// crossterm の raw モードが ISIG を落とすので Ctrl-C は**キーとして**届き
+/// `q` と同じ路（伏せへランプ → 脱力）を通る。しかし
+/// **`--no-keyboard` と、端末や ssh が落ちた場合（SIGHUP）は捕まえて
+/// いなかった** —— 既定の挙動は即死で、**機体は最後の `LowCmd` を保持する
+/// ので kp 25 のまま脚が突っ張って残る**。`go2-fake-robot` で実測した
+/// （SIGINT rc=-2 / SIGTERM rc=-15 / SIGHUP rc=-1 で、どれも機体側は
+/// `lowcmd 0 Hz … kp 25.0 kd 0.50` を最後まで報告し続けた）。
+/// 異常連続と傾きの 2 路は 2026-11-15 に脱力を送るよう揃えたのに、
+/// **運転者が最も反射的に押す路だけが残っていた**。
+///
+/// - **1 回目**: `q` と同じ（伏せへ {FOLD_SECS} s ランプ → 脱力）。
+/// - **2 回目**: **伏せを飛ばして即脱力**。階段の上で畳むのが危ういときに
+///   運転者が選べる口。キーボード有効のときも効く —— `quit` が立つと
+///   キーボードのスレッドが raw モードを畳むので、**2 回目の Ctrl-C は
+///   信号としてここへ来る**。
+/// - **捕まえられない死**（SIGKILL・電源断・クラッシュ）では**脚は固まった
+///   まま残る**。これはこちら側では直せない（手順書に書いた）。
+fn install_signal_stop(quit: Arc<AtomicBool>, hard: Arc<AtomicBool>) {
+    use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+    for sig in [SIGINT, SIGTERM, SIGHUP] {
+        let (q, h) = (quit.clone(), hard.clone());
+        // ハンドラの中で触るのは atomic 2 つだけ（割り込みから呼べる操作に
+        // 限る。印字も確保もしない）。
+        let r = unsafe {
+            signal_hook::low_level::register(sig, move || {
+                if q.swap(true, Ordering::SeqCst) {
+                    h.store(true, Ordering::SeqCst);
+                }
+            })
+        };
+        if let Err(e) = r {
+            eprintln!("policy: 信号 {sig} を捕まえられませんでした: {e}");
+        }
+    }
 }
 
 fn obs_input_from(s: &unitree_go2::LowState) -> ObsInput {
@@ -1110,6 +1151,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Position モードのゲインは policy モードでは使わない（send_raw 直行）。
     let mut plant = Go2Plant::connect(a.iface.as_deref(), [45.0; 3], [2.0; 3])?;
 
+    // **緊急停止はここで繋ぐ** —— 下の 3 s ランプの最中に Ctrl-C が来ても
+    // 止まるように、方策ループより前に立てる（§119 E.6）。
+    let quit = Arc::new(AtomicBool::new(false));
+    let hard_stop = Arc::new(AtomicBool::new(false));
+    install_signal_stop(quit.clone(), hard_stop.clone());
+
     // ── A: 実測姿勢 → 方策の既定姿勢（ik(trajectory(0,0))）へランプ ──
     let start: [f64; 12] = {
         let s = plant.last_state().ok_or("LowState がありません")?;
@@ -1146,12 +1193,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
     eprintln!("policy: 既定姿勢へ {RAMP_SECS} s でランプします（kp 0→{kp0}）");
     let ramp_n = (RAMP_SECS / CONTROL_DT) as u64;
     for i in 0..ramp_n {
+        // **ランプ中の停止要求は即脱力**（まだ歩き出していないので、伏せへ
+        // 畳み直すより脱力の方が安全。kp が途中の値なので、ここから
+        // kp 40 の伏せランプに移ると急に固くなる）。
+        if quit.load(Ordering::Relaxed) {
+            eprintln!("\npolicy: ランプ中に停止要求 — **即脱力します**");
+            plant.send_limp()?;
+            return Ok(());
+        }
         let p = i as f64 / ramp_n as f64;
         let q: [f64; 12] = core::array::from_fn(|j| (1.0 - p) * start[j] + p * default_go2[j]);
         emit(&mut plant, &mut tick, loop_start, &q, kp0 * p, kd0)?;
         plant.poll_state()?;
     }
     for _ in 0..(0.5 / CONTROL_DT) as u64 {
+        if quit.load(Ordering::Relaxed) {
+            eprintln!("\npolicy: ランプ中に停止要求 — **即脱力します**");
+            plant.send_limp()?;
+            return Ok(());
+        }
         emit(&mut plant, &mut tick, loop_start, &default_go2, kp0, kd0)?;
         plant.poll_state()?;
     }
@@ -1162,7 +1222,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         eprintln!("policy: --vx-max {m:.2} — |vx| をこの値で抑えます\r");
     }
     let cmd = Arc::new(Mutex::new(clamp(a.cmd0)));
-    let quit = Arc::new(AtomicBool::new(false));
+    // `quit` / `hard_stop` は接続直後（信号を繋いだ所）で作ってある。
     let swap_req = Arc::new(AtomicBool::new(false));
     let kb = if a.keyboard {
         Some(spawn_keyboard(
@@ -1670,24 +1730,48 @@ let mut dither = Dither::new(a.odom_dither_seed);
     }
 
     // ── C: 伏せへランプして脱力 ──
+    //
+    // **2 回目の停止要求で伏せを飛ばす**（§119 E.6）。階段の上で 2.5 s かけて
+    // 畳むのが危ういと運転者が判断したときの口。キーボード有効のときも、
+    // `quit` が立った時点でキーボードのスレッドが raw モードを畳むので、
+    // 2 回目の Ctrl-C は**信号として** install_signal_stop へ来る。
     if abort.is_none() {
-        eprintln!("\npolicy: 伏せ姿勢へ {FOLD_SECS} s でランプします");
-        let cur: [f64; 12] = {
-            let s = plant.last_state().ok_or("LowState がありません")?;
-            core::array::from_fn(|j| s.motor_state[j].q as f64)
-        };
-        let fold_n = (FOLD_SECS / CONTROL_DT) as u64;
-        for i in 0..fold_n {
-            let p = i as f64 / fold_n as f64;
-            let q: [f64; 12] = core::array::from_fn(|j| (1.0 - p) * cur[j] + p * LIE_POS[j]);
-            emit(&mut plant, &mut tick, loop_start, &q, 40.0, 2.0)?;
-            plant.poll_state()?;
-        }
-        for _ in 0..(0.5 / CONTROL_DT) as u64 {
-            emit(&mut plant, &mut tick, loop_start, &LIE_POS, 40.0, 2.0)?;
+        let mut hard = hard_stop.load(Ordering::Relaxed);
+        if !hard {
+            eprintln!(
+                "\npolicy: 伏せ姿勢へ {FOLD_SECS} s でランプします\
+                 （**もう一度 Ctrl-C を押すと伏せを飛ばして即脱力**）"
+            );
+            let cur: [f64; 12] = {
+                let s = plant.last_state().ok_or("LowState がありません")?;
+                core::array::from_fn(|j| s.motor_state[j].q as f64)
+            };
+            let fold_n = (FOLD_SECS / CONTROL_DT) as u64;
+            for i in 0..fold_n {
+                if hard_stop.load(Ordering::Relaxed) {
+                    hard = true;
+                    break;
+                }
+                let p = i as f64 / fold_n as f64;
+                let q: [f64; 12] = core::array::from_fn(|j| (1.0 - p) * cur[j] + p * LIE_POS[j]);
+                emit(&mut plant, &mut tick, loop_start, &q, 40.0, 2.0)?;
+                plant.poll_state()?;
+            }
+            if !hard {
+                for _ in 0..(0.5 / CONTROL_DT) as u64 {
+                    emit(&mut plant, &mut tick, loop_start, &LIE_POS, 40.0, 2.0)?;
+                }
+            }
         }
         plant.send_limp()?;
-        eprintln!("policy: 伏せて脱力しました");
+        eprintln!(
+            "{}",
+            if hard {
+                "policy: **即脱力しました**（伏せを飛ばした）"
+            } else {
+                "policy: 伏せて脱力しました"
+            }
+        );
     }
 
     if let Some(h) = kb {

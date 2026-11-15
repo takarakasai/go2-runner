@@ -45,6 +45,11 @@ unitree-go2 = { git = "https://github.com/takarakasai/unitree-sdk-rs.git", packa
 unitree-rpc = { git = "https://github.com/takarakasai/unitree-sdk-rs.git", package = "unitree-rpc" }
 # policy モードの WASD テレオペ（go2-gait-runner と同じ）。
 crossterm = "0.27"
+# 緊急停止の信号（SIGINT / SIGTERM / SIGHUP）を方策ループの quit に繋ぐ。
+# **crossterm が既に引いている**ので Cargo.lock は動かない（0.3.18）。
+# 自前の libc::signal ではなく signal-hook を使うのは、ハンドラの中で
+# 触るものを atomic 2 つに限りたいため。
+signal-hook = "0.3"
 nalgebra = "0.34.2"
 log = "0.4"
 env_logger = "0.11"
