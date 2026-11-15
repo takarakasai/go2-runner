@@ -81,6 +81,31 @@ const LIE_POS: [f64; 12] = [
 const TILT_ABORT_DEG_DEFAULT: f64 = 35.0;
 /// 推論失敗・観測異常がこの回数続いたら中断。
 const MAX_CONSECUTIVE_FAULTS: u32 = 10;
+/// 観測がこの時間より古い 2 ms 周期を `faults` に数える（§103 の縁）。
+const STALE_TICK_MS: f64 = 20.0;
+/// 観測が古いまま続いたときに一度だけ警告する [ms]。0 で無効。
+const STALE_WARN_MS_DEFAULT: f64 = 100.0;
+/// 観測が古いまま続いたら脱力して中断する [ms]。0 で無効。
+///
+/// **なぜ `faults` と別に持つか**（go2_rl §119 E.1）。500 Hz の輪は
+/// `state_age() > 20 ms` で `faults += 1` するが、50 Hz の推論が成功すると
+/// `faults = 0` に戻す（**古い観測は数値としては正常**なので推論は成功し
+/// 続ける）。推論は `DECIMATION = 10` tick ごとなので `faults` は 10 に
+/// 届く前に必ず戻され、**古さだけでは `MAX_CONSECUTIVE_FAULTS` に到達
+/// できない**。実測（`go2-fake-robot --drop-after 6`、走行 12 s）:
+/// 推論 601 tick 中 475 が 20 ms 超、**最大 9508 ms = 9.5 秒前の観測**でも
+/// 中断しなかった。実機では「線が抜けた後も 500 Hz で脚を駆動し続ける」。
+///
+/// **既定 500 ms の理由**: 予行の実測で古さは `<2 ms` が 448/451（最大
+/// 3.8 ms）なので 100 ms は既に桁で外。一過性の途切れで**階段の途中に
+/// 寝かせたくない**ので中止は 500 ms（= 250 周期の開ループ）に置き、
+/// 行動は**既にある中止路と同じ即脱力**にする（`--tilt-abort` と同じ。
+/// 観測が無い状態で 2.5 s かけて伏せへランプするのは、実姿勢が分からない
+/// まま動かすことになる）。
+///
+/// **射程は方策の輪だけ** —— 段 A（既定姿勢へのランプ）と段 C（伏せ）は
+/// 設計上もともと開ループなので見ていない。
+const STALE_ABORT_MS_DEFAULT: f64 = 500.0;
 
 #[derive(Clone)]
 pub(crate) struct Args {
@@ -112,6 +137,11 @@ pub(crate) struct Args {
     /// 即脱力する傾きの閾値 [度]。既定 35。**段差では 65 程度に上げる**
     /// （登りきる試行でも 50° を超えるため。詳細は `TILT_ABORT_DEG_DEFAULT`）。
     pub tilt_abort_deg: f64,
+    /// 観測が古いまま続いたときに一度だけ警告する [ms]。0 で無効。
+    pub stale_warn_ms: f64,
+    /// 観測が古いまま続いたら脱力して中断する [ms]。0 で無効。
+    /// 詳細は [`STALE_ABORT_MS_DEFAULT`]。
+    pub stale_abort_ms: f64,
     /// 2 本目の方策（同じ契約）。用途で切り替えるために持つ。
     ///
     /// **なぜ 2 本持つか**: 段差用（P）と平地省エネ用（E）は**原理的に
@@ -276,6 +306,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         impratio: None,
         cone: None,
         tilt_abort_deg: TILT_ABORT_DEG_DEFAULT,
+        stale_warn_ms: STALE_WARN_MS_DEFAULT,
+        stale_abort_ms: STALE_ABORT_MS_DEFAULT,
         effort_limit: None,
         stairs: None,
         joint_damping: None,
@@ -353,6 +385,20 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     return Err("--tilt-abort は 5〜89 度".into());
                 }
                 out.tilt_abort_deg = v;
+            }
+            "--state-stale-warn-ms" => {
+                let v: f64 = val(&mut it, "--state-stale-warn-ms")?;
+                if v < 0.0 {
+                    return Err("--state-stale-warn-ms は 0 以上（0 で無効）".into());
+                }
+                out.stale_warn_ms = v;
+            }
+            "--state-stale-abort-ms" => {
+                let v: f64 = val(&mut it, "--state-stale-abort-ms")?;
+                if v < 0.0 {
+                    return Err("--state-stale-abort-ms は 0 以上（0 で無効）".into());
+                }
+                out.stale_abort_ms = v;
             }
             "--effort-limit" => out.effort_limit = Some(val(&mut it, "--effort-limit")?),
             "--stairs" => {
@@ -1111,6 +1157,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut rtick_gap_max = 0u32; // 機体側 tick の最大の飛び
     let mut rtick_gaps = 0u64; // 1 周期ぶんを超えた飛びの回数
     let mut abort: Option<String> = None;
+    // 古さの見張りの状態（§119 E.1）。`stale_warned` は 500 Hz で同じ警告を
+    // 吐かないための掛け金で、新着が戻ると外れる。
+    let mut stale_warned = false;
+    let mut stale_episodes: u64 = 0;
     if a.hold {
         eprintln!("policy: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します\r");
     } else {
@@ -1159,9 +1209,39 @@ let mut dither = Dither::new(a.odom_dither_seed);
 
         // 観測が腐ったら（バス断など）保持のまま数えて中断へ。
         // **この 20 ms は §103 の崖のちょうど縁**（20 ms は許容の端、40 ms で
-        // 明確に落ちる）。中断の線としてはこのままにし、分布は下で記録する。
-        if plant.state_age() > Duration::from_millis(20) {
+        // 明確に落ちる）。分布は下で記録する。
+        //
+        // **`faults` はこれだけでは中断に届かない。** 50 Hz の推論が成功すると
+        // `faults = 0` に戻るので、古さは 10 に達する前に必ず消される
+        // （go2_rl §119 E.1。実測で 9.5 秒前の観測のまま走り続けた）。だから
+        // **古さの中断は下の `age_ms` で別に見る**。この行は異常と併せて
+        // 数える意味で残している。
+        let age_ms = plant.state_age().as_secs_f64() * 1e3;
+        if age_ms > STALE_TICK_MS {
             faults += 1;
+        }
+
+        // **古さ専用の見張り**（§119 E.1）。`state_age()` は新着まで単調に
+        // 増えるので、古さそのものが「古いまま続いた時間」になる。
+        if a.stale_abort_ms > 0.0 && age_ms >= a.stale_abort_ms {
+            plant.send_limp()?;
+            abort = Some(format!(
+                "LowState が {age_ms:.0} ms 届いていません — 脱力して中断しました（中止の線 {:.0} ms。iface / 配線 / 機体の電源を確認）",
+                a.stale_abort_ms
+            ));
+            break 'run;
+        }
+        if a.stale_warn_ms > 0.0 && age_ms >= a.stale_warn_ms {
+            if !stale_warned {
+                stale_warned = true;
+                stale_episodes += 1;
+                eprintln!(
+                    "policy: **LowState が {age_ms:.0} ms 届いていません**（中止は {:.0} ms）\r",
+                    a.stale_abort_ms
+                );
+            }
+        } else {
+            stale_warned = false;
         }
         if k % DECIMATION == 0 {
             let ms = plant.state_age().as_secs_f64() * 1e3;
@@ -1296,7 +1376,12 @@ let mut dither = Dither::new(a.odom_dither_seed);
                 }
             }
             if faults >= MAX_CONSECUTIVE_FAULTS {
-                abort = Some("異常が連続したため中断しました".into());
+                // **ここも脱力する。** `--tilt-abort` の路は `send_limp()` して
+                // いたが、この路は何も送らずに抜けていた —— 機体は最後の
+                // LowCmd を保持し続けるので、**脚は最後の `q_des` に突っ張った
+                // まま**になる（2026-11-15、§119 E.1 と同じ家系）。
+                plant.send_limp()?;
+                abort = Some("異常が連続したため脱力して中断しました".into());
                 break 'run;
             }
         }
@@ -1401,6 +1486,11 @@ let mut dither = Dither::new(a.odom_dither_seed);
             "policy: 要求（§103）= 推論 tick の古さが **20 ms 未満**（目標 4 ms 未満）。\
              40 ms 相当になると 20 cm 段差が −31 点。平滑化・雑音・欠測 30 %・\
              倍率 ±10 % は無害なので、見るのはここだけでよい"
+        );
+        eprintln!(
+            "policy: 古さの見張り（§119 E.1）: 警告 {:.0} ms / 中止 {:.0} ms、\
+             古いまま続いた事象 {stale_episodes} 回",
+            a.stale_warn_ms, a.stale_abort_ms
         );
     }
 

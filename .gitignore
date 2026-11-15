@@ -1,4 +1,7 @@
 target/
+# 実機構成（--no-default-features）の検証ビルド。評価系が使う
+# target/release/go2-run（sim つき）を壊さないために分けている。
+target-nodefault/
 # --joint-damping が作るモデルの一時コピー
 models/**/.*_damp*.misa
 .cargo/config.toml

@@ -155,6 +155,16 @@ fn parse() -> Result<Args, String> {
                 a.bad_crc = true;
                 i += 1;
             }
+            "--layout" => {
+                // §119 E.2 の検算: 生バイトの CRC は**詰め物に依存する**ので、
+                // 詰め物があるなら受け側で当て直すことはできない
+                // （CDR の復号は構造体リテラルなので詰め物は未初期化）。
+                println!("size_of::<LowState>()  = {}", core::mem::size_of::<LowState>());
+                println!("size_of::<IMUState>()  = {}", core::mem::size_of::<unitree_go2::IMUState>());
+                println!("size_of::<MotorState>()= {}", core::mem::size_of::<unitree_go2::MotorState>());
+                println!("size_of::<BmsState>()  = {}", core::mem::size_of::<unitree_go2::BmsState>());
+                std::process::exit(0);
+            }
             other => return Err(format!("知らないオプション `{other}`\n\n{USAGE}")),
         }
     }
@@ -326,7 +336,13 @@ fn run(a: &Args) -> Result<(), String> {
 
         // ── LowState を組んで流す ──
         if !dropped {
-            let mut s = LowState::default();
+            // **詰め物を 0 に固定する**（`init_lowcmd()` と同じ理由）。
+            // CRC は `#[repr(C)]` の生バイト全部にかかるので、`Default` の
+            // 構造体リテラルだと詰め物（LowState は 1180 − 1050 = 130 バイト）
+            // が未初期化のまま CRC に入る。
+            // SAFETY: `LowState` は DdsPod（`#[repr(C)]`、スカラと固定長配列
+            // だけ）なので全 0 は妥当な値。
+            let mut s: LowState = unsafe { core::mem::zeroed() };
             s.head = [0xFE, 0xEF];
             s.level_flag = 0xFF;
             s.tick = tick as u32;

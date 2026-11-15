@@ -44,6 +44,28 @@ pub const CONTACT_THRESHOLD: f64 = 20.0;
 /// （misa-runner 側の SafetyGate は age を見て自分で判断する。）
 const STATE_WAIT: Duration = Duration::from_secs(5);
 
+// **LowState の CRC は受け側で当て直せない**（go2_rl §119 E.2、2026-11-15）。
+//
+// 一度 `describe_state_crc()` を入れてみたが、**正しい lowstate でも必ず
+// 「不一致」になった**。理由は詰め物:
+//
+//   size_of::<LowState>() = 1180  対  payload の合計 1050  → **詰め物 130 バイト**
+//   （MotorState が 48 対 42 で ×20 = 120、IMUState が 56 対 53）
+//
+// CRC は `#[repr(C)]` の生バイト 1180 全部（295 ワード）にかかるのに、
+// **CDR の線はそのうち 1050 しか運ばない**。しかも生成された
+// `CdrDeserialize` は `Ok(Self { field: ... })` の構造体リテラルなので
+// **詰め物は未初期化**。つまり受け側で計算した CRC は**線に載っている
+// バイトの関数ではない** —— 検査としては成立しない。
+//
+// **こちらが送る LowCmd の CRC が通るのは `init_lowcmd()` が
+// `core::mem::zeroed()` しているから**で、あれは衛生ではなく**効いている
+// 仕掛け**（詰め物を 0 に固定して機体側の C 構造体と一致させている）。
+// `self.lowcmd` は毎 tick 上書きするだけなので詰め物は 0 のまま。
+//
+// → **並びの検査は CRC ではなく能動的に行う**（`go2-fake-robot
+//   --fingerprint` = 関節ごとに違う値を流して受け側の印字を読む）。
+
 /// misa の軸表（FL,FR,RL,RR × hip/thigh/calf の 12 本）。Go2Plant と
 /// MujocoPlant（policy --sim）で同じものを使う。
 pub fn go2_axes() -> Result<AxisTable, String> {
