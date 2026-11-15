@@ -25,6 +25,8 @@
 //! | **12 関節の並び**（`--fingerprint` で関節ごとに違う値を流す） | 3 |
 //! | IMU の符号（`--pitch` / `--roll` で傾ける） | 3 |
 //! | 途切れたときの振る舞い（`--drop-after`） | 3・中止 |
+//! | **lowcmd の CRC が機体の立場で通る**（`--require-crc`） | 2・3 |
+//! | 指令が捨てられたときの見え方（`--freeze`） | 中止 |
 //!
 //! 既定姿勢へのランプ（`policy` の段 A）も通る: 伏せ姿勢から始まるので
 //! 「実測姿勢 → 既定姿勢へ 3 s」が実際に動く。
@@ -33,8 +35,8 @@ use std::f64::consts::PI;
 use std::time::{Duration, Instant};
 
 use unitree_go2::{
-    crc32_core, joint, topics, LowCmd, LowState, Participant, Reader, ReaderQos, Writer, WriterQos,
-    POS_STOP_F,
+    crc32_core, joint, set_crc, topics, LowCmd, LowState, Participant, Reader, ReaderQos, Writer,
+    WriterQos, POS_STOP_F,
 };
 
 /// 電源を入れた直後の Go2 は脚を畳んで伏せている。ここから始めると
@@ -64,6 +66,8 @@ struct Args {
     dead_joint: Option<usize>,
     /// 足裏力センサが常に 0（接地判定が死ぬ）。
     no_foot_force: bool,
+    /// CRC が合わない lowcmd を**捨てる**（機体の実際の振る舞い）。
+    require_crc: bool,
 }
 
 impl Default for Args {
@@ -81,6 +85,7 @@ impl Default for Args {
             bad_crc: false,
             dead_joint: None,
             no_foot_force: false,
+            require_crc: false,
         }
     }
 }
@@ -106,6 +111,9 @@ go2-fake-robot — DDS の線の上で Go2 の役をする（実機なしで手�
                       `mode` を 0 にする。**左右対称の診断に出るか**を見る
   --no-foot-force     足裏力を常に 0 にする（接地判定が死ぬ）。手順書が
                       「実機で最初に疑うところ」と名指ししている箇所
+  --require-crc       **CRC が合わない lowcmd を捨てる**（機体の実際の振る舞い。
+                      合わなければ**配線もトピックも正常なのに脚が一切動かない**）
+  --freeze            （上記）指令が全部捨てられたときの見え方そのもの
   --rate 200          lowstate の周期を落とす（既定 500）。古さの見張りの効き方
 
   -h, --help          これ
@@ -184,6 +192,10 @@ fn parse() -> Result<Args, String> {
                 a.no_foot_force = true;
                 i += 1;
             }
+            "--require-crc" => {
+                a.require_crc = true;
+                i += 1;
+            }
             "--layout" => {
                 // §119 E.2 の検算: 生バイトの CRC は**詰め物に依存する**ので、
                 // 詰め物があるなら受け側で当て直すことはできない
@@ -192,6 +204,9 @@ fn parse() -> Result<Args, String> {
                 println!("size_of::<IMUState>()  = {}", core::mem::size_of::<unitree_go2::IMUState>());
                 println!("size_of::<MotorState>()= {}", core::mem::size_of::<unitree_go2::MotorState>());
                 println!("size_of::<BmsState>()  = {}", core::mem::size_of::<unitree_go2::BmsState>());
+                println!("size_of::<LowCmd>()    = {}", core::mem::size_of::<LowCmd>());
+                println!("size_of::<MotorCmd>()  = {}", core::mem::size_of::<unitree_go2::MotorCmd>());
+                println!("size_of::<BmsCmd>()    = {}", core::mem::size_of::<unitree_go2::BmsCmd>());
                 std::process::exit(0);
             }
             other => return Err(format!("知らないオプション `{other}`\n\n{USAGE}")),
@@ -220,6 +235,59 @@ fn accel_body(roll: f64, pitch: f64) -> [f64; 3] {
     let (sr, cr) = roll.sin_cos();
     let (sp, cp) = pitch.sin_cos();
     [-sp * G, sr * cp * G, cr * cp * G]
+}
+
+/// 受け取った `LowCmd` の CRC を**機体の立場で**当て直す。
+///
+/// **そのまま生バイトに当ててはいけない。** CDR の復号は
+/// `Ok(Self { 欄: ... })` の構造体リテラルなので、受け側の構造体の
+/// **詰め物は未初期化**（§119 E.2 で LowState について測った話がそのまま
+/// LowCmd にも当てはまる —— `MotorCmd` は 33 バイトの中身に対して
+/// `size_of` が 36 なので 3 バイト × 20 = 60 の詰め物がある）。
+///
+/// だから `zeroed()` した器に**欄ごとに写してから**当てる。これは送り手の
+/// `init_lowcmd()`（詰め物を 0 に固定している）と**同じ器**を作る操作で、
+/// 一致すれば「こちらの CRC は線を渡っても機体で通る」の実測になる。
+///
+/// 戻り値は（一致したか, 入っていた CRC, 当て直した CRC）。
+fn lowcmd_crc_check(c: &LowCmd) -> (bool, u32, u32) {
+    // SAFETY: `LowCmd` は DdsPod（`#[repr(C)]`、スカラと固定長配列だけ）なので
+    // 全 0 は妥当な値。詰め物を 0 に固定するために zeroed() から組む。
+    let mut z: LowCmd = unsafe { core::mem::zeroed() };
+    z.head = c.head;
+    z.level_flag = c.level_flag;
+    z.frame_reserve = c.frame_reserve;
+    z.sn = c.sn;
+    z.version = c.version;
+    z.bandwidth = c.bandwidth;
+    for (d, s) in z.motor_cmd.iter_mut().zip(c.motor_cmd.iter()) {
+        d.mode = s.mode;
+        d.q = s.q;
+        d.dq = s.dq;
+        d.tau = s.tau;
+        d.kp = s.kp;
+        d.kd = s.kd;
+        d.reserve = s.reserve;
+    }
+    z.bms_cmd.off = c.bms_cmd.off;
+    z.bms_cmd.reserve = c.bms_cmd.reserve;
+    z.wireless_remote = c.wireless_remote;
+    z.led = c.led;
+    z.fan = c.fan;
+    z.gpio = c.gpio;
+    z.reserve = c.reserve;
+    set_crc(&mut z);
+    (z.crc == c.crc, c.crc, z.crc)
+}
+
+/// 生バイトにそのまま当てた CRC（**検査としては成立しない**。詰め物が
+/// 未初期化なので値は毎回変わりうる。§119 E.2 の対照として数えるだけ）。
+fn lowcmd_crc_raw(c: &LowCmd) -> u32 {
+    let len = core::mem::size_of::<LowCmd>() / 4;
+    // SAFETY: `#[repr(C)]`・サイズは 4 の倍数なので [u32] として読める。
+    let words: &[u32] =
+        unsafe { core::slice::from_raw_parts(c as *const LowCmd as *const u32, len) };
+    crc32_core(&words[..len - 1])
 }
 
 /// LowState の CRC（機体が入れているもの。`set_crc` と同じ流儀で最後の
@@ -306,6 +374,9 @@ fn run(a: &Args) -> Result<(), String> {
     if a.no_foot_force {
         eprintln!("  --no-foot-force: 足裏力を常に 0 にします（接地判定が死ぬ）");
     }
+    if a.require_crc {
+        eprintln!("  --require-crc: CRC が合わない lowcmd は**捨てます**（機体と同じ）");
+    }
     eprintln!("  **実機の模型ではありません。** 数字は実機について何も言いません。");
 
     let mut q = if a.fingerprint {
@@ -322,6 +393,11 @@ fn run(a: &Args) -> Result<(), String> {
     let mut tick: u64 = 0;
     let mut cmd_count: u64 = 0;
     let mut cmd_count_prev: u64 = 0;
+    let mut crc_ok: u64 = 0;
+    let mut crc_bad: u64 = 0;
+    let mut crc_dropped: u64 = 0;
+    let mut crc_raw_ok: u64 = 0;
+    let mut crc_first: Option<(u32, u32)> = None;
     let mut last_kp = 0.0f32;
     let mut last_kd = 0.0f32;
     let mut next_report = t0 + Duration::from_secs(1);
@@ -344,6 +420,31 @@ fn run(a: &Args) -> Result<(), String> {
         // ── lowcmd を読む（溜まっていれば最新まで） ──
         while let Some(c) = reader.poll().map_err(|e| format!("poll: {e}"))? {
             cmd_count += 1;
+            // ── CRC を**機体の立場で**当て直す（常に数える） ──
+            let (ok, got, want) = lowcmd_crc_check(&c);
+            if ok {
+                crc_ok += 1;
+            } else {
+                crc_bad += 1;
+                if crc_first.is_none() {
+                    crc_first = Some((got, want));
+                    eprintln!(
+                        "go2-fake-robot: **lowcmd の CRC が合いません** 入 0x{got:08x} 期待 0x{want:08x}{}",
+                        if a.require_crc {
+                            " —— 捨てます（実機でも脚は一切動きません）"
+                        } else {
+                            "（--require-crc なら捨てます）"
+                        }
+                    );
+                }
+            }
+            if lowcmd_crc_raw(&c) == got {
+                crc_raw_ok += 1;
+            }
+            if a.require_crc && !ok {
+                crc_dropped += 1;
+                continue;
+            }
             if !(a.fingerprint || a.freeze) {
                 for g in 0..joint::NUM_LEG_JOINTS {
                     let m = &c.motor_cmd[g];
@@ -462,5 +563,46 @@ fn run(a: &Args) -> Result<(), String> {
         "go2-fake-robot: 終わり（lowstate {} 発行、lowcmd {} 受信）",
         tick, cmd_count
     );
+    // **CRC の検算は常に印字する**（§119 E.5）。「合っている」も記録に残す。
+    eprintln!(
+        "go2-fake-robot: lowcmd の CRC: 一致 {crc_ok} / 不一致 {crc_bad}{}  \
+         ——（対照）生バイトにそのまま当てて一致 {crc_raw_ok}/{cmd_count}",
+        if crc_dropped > 0 {
+            format!("（捨てた {crc_dropped}）")
+        } else {
+            String::new()
+        }
+    );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unitree_go2::init_lowcmd;
+
+    /// 検査が**両方向に動く**こと。片方向（正しいものを通す）だけでは
+    /// 「常に true を返す検査」と区別できない（§119 E.2 の教訓 ——
+    /// 検査を足す前にその検査が成立するかを測る）。
+    #[test]
+    fn the_lowcmd_crc_check_has_both_polarities() {
+        let mut c = init_lowcmd();
+        for g in 0..joint::NUM_LEG_JOINTS {
+            c.motor_cmd[g].q = 0.1 * g as f32;
+            c.motor_cmd[g].kp = 25.0;
+            c.motor_cmd[g].kd = 0.5;
+        }
+        set_crc(&mut c);
+        let (ok, got, want) = lowcmd_crc_check(&c);
+        assert!(ok, "正しい CRC は通るべき: 入 0x{got:08x} 期待 0x{want:08x}");
+
+        let mut bit = c;
+        bit.crc ^= 1;
+        assert!(!lowcmd_crc_check(&bit).0, "1 bit 違えば落ちるべき");
+
+        // CRC を直さずに中身を変えたら落ちる = CRC が**中身の関数**になっている。
+        let mut stale = c;
+        stale.motor_cmd[0].q += 0.5;
+        assert!(!lowcmd_crc_check(&stale).0, "中身を変えたら落ちるべき");
+    }
 }

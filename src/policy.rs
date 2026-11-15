@@ -122,6 +122,30 @@ const STALE_ABORT_MS_DEFAULT: f64 = 500.0;
 /// 300 ms にしたのは、0.3 m/s で歩く 4 足が 4 脚とも浮く時間ではないから。
 const NO_CONTACT_WARN_MS_DEFAULT: f64 = 300.0;
 
+/// 追従の見張りの窓 [s]。0 で無効。
+///
+/// **なぜ要るか**（go2_rl §119 E.5）。機体が `lowcmd` を捨てると
+/// （CRC 不一致・`sport_mode` がまだモータを握っている・モータ未有効化）
+/// **配線もトピックも正常なのに脚が一切動かない**。予行で実測
+/// （`go2-fake-robot --freeze`、走行 8 s）: 古さの見張り 0 回・接地 0.0 %・
+/// `LowState 新着` 500 Hz —— **見張りは全部緑のまま走り切った**。
+/// 唯一の手がかりは `v=(+0.00,+0.00)` と `h=0.09m` で、どちらも
+/// **別の故障（足裏力の死・静止）と同じ見え方**。
+///
+/// **誤差ではなく可動域の比で見る。** 追従誤差に閾値を置くと誤爆する
+/// —— 階段では `|q_des − q|` が 4 rad 規模まで出るのが**正常**
+/// （`--tau-ff` の項を参照）。指令は動いているのに実測が動かない、という
+/// **形**で判定する: 窓の中の可動域が「指令 > 0.10 rad かつ
+/// 実測 < 0.02 rad（12 関節すべて）」。歩いていれば 12 関節すべてが動くので
+/// 誤爆しない。`--hold` は指令が動かないので窓が立たず黙る。
+///
+/// **警告だけで中断はしない**（接地の見張りと同じ理由。行動の選択は運転者）。
+const TRACK_WIN_S_DEFAULT: f64 = 1.0;
+/// 窓を判定に数える最小の**指令の**可動域 [rad]。
+const TRACK_DES_MIN_RAD: f64 = 0.10;
+/// 「どの関節も動いていない」と見る**実測の**可動域の上限 [rad]。
+const TRACK_MEAS_MAX_RAD: f64 = 0.02;
+
 #[derive(Clone)]
 pub(crate) struct Args {
     pub model: String,
@@ -160,6 +184,8 @@ pub(crate) struct Args {
     /// 4 脚とも非接地が続いたら 1 回だけ警告する [ms]。0 で無効。
     /// 詳細は [`NO_CONTACT_WARN_MS_DEFAULT`]。
     pub no_contact_warn_ms: f64,
+    /// 追従の見張りの窓 [s]（0 で無効）。§119 E.5。
+    pub track_win_s: f64,
     /// 2 本目の方策（同じ契約）。用途で切り替えるために持つ。
     ///
     /// **なぜ 2 本持つか**: 段差用（P）と平地省エネ用（E）は**原理的に
@@ -327,6 +353,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         stale_warn_ms: STALE_WARN_MS_DEFAULT,
         stale_abort_ms: STALE_ABORT_MS_DEFAULT,
         no_contact_warn_ms: NO_CONTACT_WARN_MS_DEFAULT,
+        track_win_s: TRACK_WIN_S_DEFAULT,
         effort_limit: None,
         stairs: None,
         joint_damping: None,
@@ -425,6 +452,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     return Err("--no-contact-warn-ms は 0 以上（0 で無効）".into());
                 }
                 out.no_contact_warn_ms = v;
+            }
+            "--track-win-s" => {
+                let v: f64 = val(&mut it, "--track-win-s")?;
+                if v < 0.0 {
+                    return Err("--track-win-s は 0 以上（0 で無効）".into());
+                }
+                out.track_win_s = v;
             }
             "--effort-limit" => out.effort_limit = Some(val(&mut it, "--effort-limit")?),
             "--stairs" => {
@@ -1193,6 +1227,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut nc_run_max: u64 = 0;
     let mut nc_episodes: u64 = 0;
     let mut nc_warned = false;
+    // 追従の見張り（§119 E.5）。窓ごとに**可動域**を取り、指令が動いている
+    // のに実測が動かない窓を数える。`q_des` は Go2 順の `q_go2`、実測は
+    // `inp.joint_q_go2`。
+    let mut tr_lo = [f64::INFINITY; 12];
+    let mut tr_hi = [f64::NEG_INFINITY; 12];
+    let mut tr_dlo = [f64::INFINITY; 12];
+    let mut tr_dhi = [f64::NEG_INFINITY; 12];
+    let mut tr_deadline = Instant::now() + Duration::from_secs_f64(a.track_win_s.max(1e-3));
+    let mut tr_wins: u64 = 0; // 指令が動いていた窓の数（= 判定できた窓）
+    let mut tr_dead: u64 = 0; // そのうち実測が動かなかった窓
+    let mut tr_ratio_min = f64::INFINITY;
+    let mut tr_warned = false;
     if a.hold {
         eprintln!("policy: --hold — 方策は走らせず既定姿勢を保持して観測だけ表示します\r");
     } else {
@@ -1482,6 +1528,48 @@ let mut dither = Dither::new(a.odom_dither_seed);
             tau_go2[g] = dc_motor_clip(tau_isaac[i], dq_i, effort_limit_isaac(i));
         }
         plant.send_raw(&q_go2, &zeros, &kp_go2, &kd_go2, &tau_go2)?;
+
+        // ── 追従の見張り（§119 E.5）: **誤差ではなく可動域の比** ──
+        if a.track_win_s > 0.0 {
+            for g in 0..12 {
+                let m = inp.joint_q_go2[g];
+                tr_lo[g] = tr_lo[g].min(m);
+                tr_hi[g] = tr_hi[g].max(m);
+                tr_dlo[g] = tr_dlo[g].min(q_go2[g]);
+                tr_dhi[g] = tr_dhi[g].max(q_go2[g]);
+            }
+            if Instant::now() >= tr_deadline {
+                let rd = (0..12)
+                    .map(|g| tr_dhi[g] - tr_dlo[g])
+                    .fold(0.0f64, f64::max);
+                let rm = (0..12).map(|g| tr_hi[g] - tr_lo[g]).fold(0.0f64, f64::max);
+                if rd > TRACK_DES_MIN_RAD {
+                    tr_wins += 1;
+                    tr_ratio_min = tr_ratio_min.min(rm / rd);
+                    if rm < TRACK_MEAS_MAX_RAD {
+                        tr_dead += 1;
+                        if !tr_warned {
+                            tr_warned = true;
+                            eprintln!(
+                                "policy: **指令が機体に届いていません** — {:.1} s の窓で指令の可動域 {rd:.3} rad に対して実測の可動域が {rm:.3} rad（12 関節すべて）\r",
+                                a.track_win_s
+                            );
+                            eprintln!(
+                                "policy:   線は生きている（LowState は届いている）のに脚が動かない = **機体が lowcmd を捨てている**。\r"
+                            );
+                            eprintln!(
+                                "policy:   順に確かめる: (1) sport_mode の解除（手順 1） (2) モータが servo mode か（motor_state[*].mode） (3) lowcmd の CRC\r"
+                            );
+                        }
+                    }
+                }
+                tr_lo = [f64::INFINITY; 12];
+                tr_hi = [f64::NEG_INFINITY; 12];
+                tr_dlo = [f64::INFINITY; 12];
+                tr_dhi = [f64::NEG_INFINITY; 12];
+                tr_deadline += Duration::from_secs_f64(a.track_win_s);
+            }
+        }
         tick += 1;
         let next = loop_start + Duration::from_secs_f64(CONTROL_DT * tick as f64);
         if let Some(d) = next.checked_duration_since(Instant::now()) {
@@ -1566,6 +1654,18 @@ let mut dither = Dither::new(a.odom_dither_seed);
              **非接地が長いなら足裏力センサを疑う**（脚オドメトリが恒等的に 0 になる）",
             100.0 * nc_ticks as f64 / (poll_total as f64).max(1.0),
             nc_run_max as f64 * CONTROL_DT * 1e3
+        );
+        // **追従の見張りも必ず印字する**（§119 E.5）。「届いている」も記録に残す。
+        eprintln!(
+            "policy: 追従（§119 E.5）: 指令が動いた窓 {tr_wins}（{:.1} s ごと）、\
+             そのうち実測が動かなかった窓 {tr_dead}、可動域比の最小 {}。\
+             **比が 0 に近いなら機体が lowcmd を捨てている**（sport_mode / モータの mode / CRC）",
+            a.track_win_s,
+            if tr_wins > 0 {
+                format!("{tr_ratio_min:.2}")
+            } else {
+                "—（指令が動く窓が無かった。--hold なら正常）".to_string()
+            }
         );
     }
 
@@ -1803,6 +1903,49 @@ mod heading_servo_tests {
             assert_eq!(t[2], 0.0);
         }
         assert_eq!(sv.mean_abs_corr(), 0.0);
+    }
+
+    /// 見張りの 3 つの摘み（§119 E.1 / E.4 / E.5）。既定は有効で、
+    /// **0 で旧い挙動に戻せる**こと（= 逃げ道があること）を固定する。
+    #[test]
+    fn the_three_watchdog_knobs_default_on_and_zero_disables() {
+        let ok = |args: &[&str]| -> Args {
+            let v: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            parse(&v).expect("parse")
+        };
+        let d = ok(&["--model", "p.onnx"]);
+        assert_eq!(d.stale_warn_ms, STALE_WARN_MS_DEFAULT);
+        assert_eq!(d.stale_abort_ms, STALE_ABORT_MS_DEFAULT);
+        assert_eq!(d.no_contact_warn_ms, NO_CONTACT_WARN_MS_DEFAULT);
+        assert_eq!(d.track_win_s, TRACK_WIN_S_DEFAULT);
+        let off = ok(&[
+            "--model",
+            "p.onnx",
+            "--state-stale-warn-ms",
+            "0",
+            "--state-stale-abort-ms",
+            "0",
+            "--no-contact-warn-ms",
+            "0",
+            "--track-win-s",
+            "0",
+        ]);
+        assert_eq!(off.stale_warn_ms, 0.0);
+        assert_eq!(off.stale_abort_ms, 0.0);
+        assert_eq!(off.no_contact_warn_ms, 0.0);
+        assert_eq!(off.track_win_s, 0.0);
+        for k in [
+            "--state-stale-warn-ms",
+            "--state-stale-abort-ms",
+            "--no-contact-warn-ms",
+            "--track-win-s",
+        ] {
+            let bad: Vec<String> = ["--model", "p.onnx", k, "-1"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            assert!(parse(&bad).is_err(), "{k} は負を拒むべき");
+        }
     }
 
     #[test]
