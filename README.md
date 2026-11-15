@@ -75,6 +75,47 @@ MUJOCO_DYNAMIC_LINK_DIR=$HOME/.mujoco/mujoco-3.8.0/lib \
 vx 0.12 指令で 10 s に +1.10 m、高さ 0.298 m 維持、転倒なし —
 Python `sim2sim_mit_go2_mujoco.py --natural-walk` と同等の挙動）。
 
+## 実機なしで手順 1〜3 を予行する（`go2-fake-robot`）
+
+実機の立ち上げ手順のうち、吊り（手順 4・5）は `policy --sim --suspend` で
+予行してある。**DDS の線そのもの（手順 1・2・3）は予行できていなかった** ——
+初接続の日に `rt/lowstate` が届かなかったとき、原因が「配線 / iface /
+sport_mode」なのか「こちらのコード」なのかをその場で切り分けられない。
+
+`go2-fake-robot` は**線の上で Go2 の役をする**。関節は `q_des` を 1 次遅れで
+追うだけで、**実機の模型ではない**（重力も接触も剛体も無い）。確かめられるのは
+こちら側だけ: topic 名・QoS・12 関節の並び・IMU の符号・診断の出方。
+
+```bash
+cargo build --release --no-default-features        # 2 本とも出る
+export LD_LIBRARY_PATH=$(dirname $(find target/release -name libddsc.so.0 | head -1))
+
+# 端末 A（ロボットの役）        # 端末 B（いつもの go2-run）
+./target/release/go2-fake-robot --iface lo
+GO2_IFACE=lo ./target/release/go2-run --robot robots/go2.toml bridge
+GO2_IFACE=lo ./target/release/go2-run policy --model $M --hold --no-release
+```
+
+> **`--iface lo` を明示する。** 既定の経路（このホストでは wifi）だと
+> 同一ホストの 2 participant が噛み合わず、`bridge` は実機と**同じ文言**で
+> 「`待機: LowState が届きません（iface / 192.168.123.x / 配線を確認）`」と
+> 出る。CycloneDDS の 1 行
+> `selected interface "lo" is not multicast-capable: disabling multicast`
+> が出ていれば線は生きている。**この文言は「配線」とは限らない** ——
+> **選んだ NIC の multicast** でも同じ文言になる。
+
+主な旗:
+
+| 旗 | 何が確かめられるか |
+|---|---|
+| `--fingerprint` | 関節 g に `q = 0.01*(g+1)` を流す。受け側が `FR(0.01,0.02,0.03) FL(0.04..) RR(0.07..) RL(0.10..)` と出せば **12 関節の並びは正しい** |
+| `--pitch <deg>` / `--roll <deg>` | IMU の符号。`g_body = (sin p, −sin r·cos p, −cos r·cos p)` と一致するか |
+| `--drop-after <s>` | **途切れたときの振る舞い**（下の「まだやっていないこと」参照） |
+| `--freeze` | lowcmd を無視して伏せ姿勢のまま流す |
+| `--bad-crc` | lowstate の CRC を壊す（受け側が見ているかの確認。**今は見ていない**） |
+
+**配備の経路には入らない** —— `go2-run` は `fake_robot.rs` を参照していない。
+
 ## ビルドの注意
 
 - `libddsc.so.0`（CycloneDDS）は cyclonedds-sys がビルドし、`cargo run` は
@@ -89,7 +130,20 @@ Python `sim2sim_mit_go2_mujoco.py --natural-walk` と同等の挙動）。
 
 - 実機での歩容/WBC・policy の実走（MuJoCo 閉ループまでは検証済み）。
   実機手順: `check` → `bridge`（受信確認）→ `policy --hold`（観測符号）
-  → 吊って `policy` → 接地。
+  → 吊って `policy` → 接地。**手順 1〜3 は `go2-fake-robot` で予行済み**
+  （上記。2026-11-15）。
+- **`policy` は lowstate が途切れても止まらない。** 500 Hz の輪は
+  `state_age() > 20 ms` で `faults += 1` するが、50 Hz の推論が成功すると
+  `faults = 0` に戻す。推論は 10 tick ごとなので `faults` は 10 に届く前に
+  必ず戻され、**古さだけでは `MAX_CONSECUTIVE_FAULTS = 10` に到達できない**。
+  `--drop-after 6` で実測: 12 s の走行で**推論 601 tick 中 475 が古さ
+  20 ms 超、最大 9508 ms（9.5 秒前の観測）でも中断しない**。
+  実機では「線が抜けた後も 500 Hz で脚を駆動し続ける」。直すなら古さ専用の
+  計数（連続 100 ms 超で中止）にする。**未着手。**
+- **lowstate の CRC を誰も見ていない。** `--bad-crc` で流しても `bridge` は
+  4948 回「新着」と数える。機体は LowCmd の CRC を見る（こちらは `set_crc`
+  している）が、逆向きは見ていないので、**構造体の並びが食い違っても
+  CRC では気づけない**。
 - misa-runner にコントローラ差し込み口（seam）が入ったら、`policy` の
   自前ループを `run` 系へ統合する。
 

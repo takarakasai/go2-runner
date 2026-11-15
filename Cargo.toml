@@ -22,6 +22,13 @@ description = "Unitree Go2 runner on misa-runner: model-based gait/WBC via the G
 name = "go2-run"
 path = "src/main.rs"
 
+# 実機なしで手順 1〜3（DDS の線そのもの）を予行する道具。**配備の経路には
+# 入らない** —— go2-run は fake_robot.rs を参照していない。misa-runner も
+# MuJoCo も引かないので `--no-default-features` でも通る。
+[[bin]]
+name = "go2-fake-robot"
+path = "src/fake_robot.rs"
+
 [dependencies]
 # misa-runner は git 依存（namiashi-runner2 と同じ形）。misa_core / misa_hal は
 # misa-runner の再エクスポートを使う — 自前で引くと git の版が食い違ったとき
