@@ -112,7 +112,7 @@ GO2_IFACE=lo ./target/release/go2-run policy --model $M --hold --no-release
 | `--pitch <deg>` / `--roll <deg>` | IMU の符号。`g_body = (sin p, −sin r·cos p, −cos r·cos p)` と一致するか |
 | `--drop-after <s>` | **途切れたときの振る舞い**（下の「まだやっていないこと」参照） |
 | `--freeze` | lowcmd を無視して伏せ姿勢のまま流す |
-| `--bad-crc` | lowstate の CRC を壊す（受け側が見ているかの確認。**今は見ていない**） |
+| `--bad-crc` | lowstate の CRC を壊す。**受け側は見ていないし、見られない** —— 詰め物 130 バイトが CDR の線に載らないので、受け側で計算した CRC は payload の関数にならない（下記） |
 
 **配備の経路には入らない** —— `go2-run` は `fake_robot.rs` を参照していない。
 
@@ -132,20 +132,45 @@ GO2_IFACE=lo ./target/release/go2-run policy --model $M --hold --no-release
   実機手順: `check` → `bridge`（受信確認）→ `policy --hold`（観測符号）
   → 吊って `policy` → 接地。**手順 1〜3 は `go2-fake-robot` で予行済み**
   （上記。2026-11-15）。
-- **`policy` は lowstate が途切れても止まらない。** 500 Hz の輪は
-  `state_age() > 20 ms` で `faults += 1` するが、50 Hz の推論が成功すると
-  `faults = 0` に戻す。推論は 10 tick ごとなので `faults` は 10 に届く前に
-  必ず戻され、**古さだけでは `MAX_CONSECUTIVE_FAULTS = 10` に到達できない**。
-  `--drop-after 6` で実測: 12 s の走行で**推論 601 tick 中 475 が古さ
-  20 ms 超、最大 9508 ms（9.5 秒前の観測）でも中断しない**。
-  実機では「線が抜けた後も 500 Hz で脚を駆動し続ける」。直すなら古さ専用の
-  計数（連続 100 ms 超で中止）にする。**未着手。**
-- **lowstate の CRC を誰も見ていない。** `--bad-crc` で流しても `bridge` は
-  4948 回「新着」と数える。機体は LowCmd の CRC を見る（こちらは `set_crc`
-  している）が、逆向きは見ていないので、**構造体の並びが食い違っても
-  CRC では気づけない**。
-- misa-runner にコントローラ差し込み口（seam）が入ったら、`policy` の
-  自前ループを `run` 系へ統合する。
+- misa-runner にコントローラ差し込み口（seam）が入ったら統合（下記）。
+
+### 予行で見つけて直した穴（2026-11-15）
+
+- **`policy` が lowstate の途切れで止まらなかった** —— 500 Hz の輪は
+  `state_age() > 20 ms` で `faults += 1` するのに、50 Hz の推論が成功すると
+  `faults = 0` に戻す（古い観測は**数値としては正常**なので推論は成功し
+  続ける）。推論は 10 tick ごとなので `faults` は 10 に届く前に必ず戻され、
+  **古さだけでは `MAX_CONSECUTIVE_FAULTS = 10` に到達できなかった**。
+  実測: 12 s の走行で推論 601 tick 中 475 が 20 ms 超、**最大 9508 ms
+  （9.5 秒前の観測）でも中断しない** = 実機なら線が抜けた後も 500 Hz で
+  脚を駆動し続ける。
+  → **古さ専用の見張りを `faults` と別に持たせた**:
+  `--state-stale-warn-ms`（既定 100、1 回だけ警告）/
+  `--state-stale-abort-ms`（既定 500、**脱力して中断**。0 で無効）。
+  実測で 102 ms で警告・502 ms で中断、健全な走行では事象 0 回。
+- **「異常が連続した」中止路が脱力していなかった** —— `--tilt-abort` の路は
+  `send_limp()` していたが、こちらは何も送らずに抜けていた。機体は最後の
+  LowCmd を保持するので**脚は最後の `q_des` に突っ張ったまま**になる。
+  揃えて脱力させた。
+- **lowstate の CRC は受け側で当て直せない**（検査にしなかった理由）:
+
+  ```
+  size_of::<LowState>() = 1180   payload の合計 1050   → 詰め物 130 バイト
+  （MotorState 48 対 42 の ×20 = 120、IMUState 56 対 53）
+  ```
+
+  CRC は `#[repr(C)]` の生バイト 1180 全部（295 ワード）にかかるのに
+  **CDR の線は 1050 しか運ばない**。しかも生成された `CdrDeserialize` は
+  `Ok(Self { field: ... })` の構造体リテラルなので**詰め物は未初期化**。
+  受け側で計算した CRC は**線に載っているバイトの関数ではない** ——
+  実際に入れてみたら正しい lowstate で必ず「不一致」になった。
+  **こちらが送る LowCmd の CRC が通るのは `init_lowcmd()` の
+  `core::mem::zeroed()` が詰め物を 0 に固定しているから**で、あれは衛生では
+  なく**効いている仕掛け**。→ **並びの検査は CRC ではなく能動的に**
+  （`go2-fake-robot --fingerprint`）。
+
+**まだやっていないこと（続き）**: misa-runner にコントローラ差し込み口
+（seam）が入ったら、`policy` の自前ループを `run` 系へ統合する。
 
 ## 別 PC での立ち上げ（依存の用意）
 
