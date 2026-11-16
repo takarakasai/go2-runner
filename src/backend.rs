@@ -54,7 +54,16 @@ pub fn release_sport_mode(iface: Option<&str>) -> Result<(), String> {
         log::info!("GO2_NO_RELEASE=1: sport_mode の解除を省きます");
         return Ok(());
     }
-    let sw = unitree_rpc::MotionSwitcher::new(iface.unwrap_or(""))
+    // NIC の指定が無いと Cyclone は `name=""` の設定を読んで
+    // `Nameless and address-less interface listed in interfaces.` で落ちる。
+    // 落ちる場所が MotionSwitcher になるので、原因（GO2_IFACE）を名指しする。
+    // **解除の路は 2 つ（policy と run）だが、どちらもここを通る。**
+    let iface = iface.filter(|s| !s.is_empty()).ok_or(
+        "GO2_IFACE が設定されていません（例 GO2_IFACE=eno1）。\n\
+         sport_mode の解除は NIC の指定なしには行えません。\n\
+         `ip -brief addr` で機体へ繋がっている NIC を確かめる",
+    )?;
+    let sw = unitree_rpc::MotionSwitcher::new(iface)
         .map_err(|e| format!("MotionSwitcher: {e}"))?;
     sw.release().map_err(|e| format!("sport_mode release: {e}"))?;
     log::info!("sport_mode を解除しました");
